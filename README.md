@@ -2,8 +2,6 @@
 
 Nostr relay logging proxy. Sits transparently between clients and your relay, passing all traffic through unchanged while logging IP addresses, published events, and subscription requests.
 
-Designed for research — built to gather data for a talk on nostr relay usage at a privacy-focused Bitcoin conference.
-
 ## How It Works
 
 ```
@@ -24,15 +22,27 @@ Honey is a transparent WebSocket proxy. Clients connect to Honey as if it were t
 
 Message content is **never** stored — only its length.
 
-## Quick Start
+## Quick Start (Dev)
 
 ```bash
 cp .env.example .env
-# Edit BACKEND_WS_URL and BACKEND_HTTP_URL to point to your real relay
-docker compose up -d
+# Edit BACKEND_WS_URL and BACKEND_HTTP_URL to point to your relay
+docker compose -f docker-compose.dev.yml up
 ```
 
-Then visit `http://localhost:8080/` for the dashboard.
+Hot reload via `node --watch`. Code changes restart automatically.
+
+## Production (Dokploy)
+
+1. Create a new project in Dokploy pointing to this repo
+2. Set environment variables:
+   - `BACKEND_WS_URL` — `ws://your-relay:port`
+   - `BACKEND_HTTP_URL` — `http://your-relay:port`
+   - `ADMIN_TOKEN` — optional, protects the dashboard
+3. Deploy — Dokploy handles TLS via Let's Encrypt
+4. Repoint your relay's DNS to the Dokploy service
+
+SQLite database persists in a Docker named volume automatically.
 
 ## Configuration
 
@@ -40,22 +50,12 @@ Then visit `http://localhost:8080/` for the dashboard.
 |---------|---------|-------------|
 | `BACKEND_WS_URL` | `ws://localhost:8008` | WebSocket URL of the real relay |
 | `BACKEND_HTTP_URL` | `http://localhost:8008` | HTTP URL for NIP-11 relay info passthrough |
-| `PORT` | `8080` | Port to listen on |
 | `ADMIN_TOKEN` | _(none)_ | Optional Bearer token to protect the admin API |
-| `DATA_DIR` | `./data` | SQLite database location |
-
-## Deployment (Dokploy)
-
-1. Create a new project in Dokploy
-2. Point it at this repo
-3. Set environment variables (at minimum `BACKEND_WS_URL` and `BACKEND_HTTP_URL`)
-4. Deploy — Dokploy handles TLS via Let's Encrypt
-5. Repoint your relay's DNS to the Dokploy service
 
 ## Tech Stack
 
 - **Node.js** + `ws` — WebSocket proxy
-- **SQLite** (`better-sqlite3`) — zero-ops data storage
+- **SQLite** (`node:sqlite`) — zero-dependency data storage
 - **Express** — admin API + dashboard server
 - **Vanilla JS** — dashboard frontend (no build step)
 

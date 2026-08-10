@@ -8,8 +8,11 @@ services:
       - BACKEND_HTTP_URL=${BACKEND_HTTP_URL:-http://host.docker.internal:8008}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
     volumes:
-      - honey-data:/app/data
-    restart: unless-stopped
+      - ./:/app
+      - /app/node_modules
+      - honey-dev-data:/app/data
+    command: node --watch src/index.js
+    restart: "no"
 
 volumes:
-  honey-data:
+  honey-dev-data:
