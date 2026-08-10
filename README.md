@@ -22,22 +22,24 @@ Honey is a transparent WebSocket proxy. Clients connect to Honey as if it were t
 
 Message content is **never** stored — only its length.
 
-## Quick Start (Dev)
+## Quick Start
 
 ```bash
 cp .env.example .env
-# Edit BACKEND_WS_URL and BACKEND_HTTP_URL to point to your relay
-docker compose -f docker-compose.dev.yml up
-```
+# Edit BACKEND_HOST to point to your relay
 
-Hot reload via `node --watch`. Code changes restart automatically.
+# Dev (hot reload):
+docker compose --profile dev up
+
+# Prod:
+docker compose up -d
+```
 
 ## Production (Dokploy)
 
 1. Create a new project in Dokploy pointing to this repo
 2. Set environment variables:
-   - `BACKEND_WS_URL` — `ws://your-relay:port`
-   - `BACKEND_HTTP_URL` — `http://your-relay:port`
+   - `BACKEND_HOST` — `your-relay:port`
    - `ADMIN_TOKEN` — optional, protects the dashboard
 3. Deploy — Dokploy handles TLS via Let's Encrypt
 4. Repoint your relay's DNS to the Dokploy service
@@ -48,8 +50,7 @@ SQLite database persists in a Docker named volume automatically.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `BACKEND_WS_URL` | `ws://localhost:8008` | WebSocket URL of the real relay |
-| `BACKEND_HTTP_URL` | `http://localhost:8008` | HTTP URL for NIP-11 relay info passthrough |
+| `BACKEND_HOST` | `localhost:8008` | Host and port of the real relay |
 | `ADMIN_TOKEN` | _(none)_ | Optional Bearer token to protect the admin API |
 
 ## Tech Stack

@@ -4,12 +4,27 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - BACKEND_WS_URL=${BACKEND_WS_URL:-ws://host.docker.internal:8008}
-      - BACKEND_HTTP_URL=${BACKEND_HTTP_URL:-http://host.docker.internal:8008}
+      - BACKEND_HOST=${BACKEND_HOST:-localhost:8008}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
     volumes:
       - honey-data:/app/data
     restart: unless-stopped
 
+  honey-dev:
+    build: .
+    profiles: ["dev"]
+    ports:
+      - "8080:8080"
+    environment:
+      - BACKEND_HOST=${BACKEND_HOST:-host.docker.internal:8008}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - honey-dev-data:/app/data
+    command: node --watch src/index.js
+    restart: "no"
+
 volumes:
   honey-data:
+  honey-dev-data:

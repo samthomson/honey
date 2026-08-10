@@ -6,8 +6,10 @@ const db = require('./db');
 const createAdminRouter = require('./admin');
 
 // --- Config ---
-const BACKEND_WS_URL = process.env.BACKEND_WS_URL || 'ws://localhost:8008';
-const BACKEND_HTTP_URL = process.env.BACKEND_HTTP_URL || 'http://localhost:8008';
+// Single BACKEND_HOST:port — we derive ws:// and http:// from it
+const BACKEND_HOST = process.env.BACKEND_HOST || 'localhost:8008';
+const BACKEND_WS_URL = `ws://${BACKEND_HOST}`;
+const BACKEND_HTTP_URL = `http://${BACKEND_HOST}`;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const DATA_DIR = process.env.DATA_DIR || './data';
