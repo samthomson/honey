@@ -1,0 +1,16 @@
+{
+  "name": "honey",
+  "version": "1.0.0",
+  "description": "Nostr relay logging proxy",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

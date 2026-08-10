@@ -1,0 +1,16 @@
+services:
+  honey:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - BACKEND_WS_URL=ws://your-relay:8008
+      - BACKEND_HTTP_URL=http://your-relay:8008
+      - ADMIN_TOKEN=change-me
+      - DATA_DIR=/app/data
+    volumes:
+      - honey-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  honey-data:
