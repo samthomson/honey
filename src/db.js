@@ -19,7 +19,8 @@ function init(dataDir) {
       ip TEXT NOT NULL,
       user_agent TEXT,
       connected_at INTEGER NOT NULL,
-      disconnected_at INTEGER
+      disconnected_at INTEGER,
+      pubkey TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_conn_ip ON connections(ip);
     CREATE INDEX IF NOT EXISTS idx_conn_at ON connections(connected_at);
@@ -51,6 +52,7 @@ function init(dataDir) {
     );
     CREATE INDEX IF NOT EXISTS idx_sub_ip ON subscriptions(ip);
     CREATE INDEX IF NOT EXISTS idx_sub_at ON subscriptions(logged_at);
+    CREATE INDEX IF NOT EXISTS idx_sub_conn ON subscriptions(connection_id);
 
     CREATE TABLE IF NOT EXISTS subscription_closes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +62,10 @@ function init(dataDir) {
       logged_at INTEGER NOT NULL
     );
   `);
+
+  // --- Migrations (additive, safe to re-run) ---
+  try { db.exec('ALTER TABLE connections ADD COLUMN pubkey TEXT'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_conn_pubkey ON connections(pubkey)'); } catch {}
 }
 
 function logConnection(ip, userAgent) {
@@ -72,6 +78,12 @@ function logDisconnection(connId) {
     .run(Math.floor(Date.now() / 1000), connId);
 }
 
+function updateConnectionPubkey(connId, pubkey) {
+  if (!pubkey) return;
+  db.prepare('UPDATE connections SET pubkey = ? WHERE id = ? AND (pubkey IS NULL OR pubkey != ?)')
+    .run(pubkey, connId, pubkey);
+}
+
 function logPublishedEvent(connId, ip, event) {
   db.prepare(
     'INSERT INTO published_events (connection_id, ip, event_id, pubkey, kind, created_at, tags, content_len, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -79,6 +91,11 @@ function logPublishedEvent(connId, ip, event) {
     connId, ip, event.event_id, event.pubkey, event.kind, event.created_at,
     event.tags, event.content_len, Math.floor(Date.now() / 1000)
   );
+
+  // Associate pubkey to the connection
+  if (event.pubkey) {
+    updateConnectionPubkey(connId, event.pubkey);
+  }
 }
 
 function logSubscription(connId, ip, subId, filters) {
@@ -102,6 +119,7 @@ function getStats() {
     totalEvents: db.prepare('SELECT COUNT(*) as c FROM published_events').get().c,
     totalSubscriptions: db.prepare('SELECT COUNT(*) as c FROM subscriptions').get().c,
     activeConnections: db.prepare('SELECT COUNT(*) as c FROM connections WHERE disconnected_at IS NULL').get().c,
+    uniquePubkeys: db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM published_events WHERE pubkey IS NOT NULL').get().c,
   };
 }
 
@@ -110,11 +128,21 @@ function getConnections(limit, offset) {
 }
 
 function getEvents(limit, offset) {
-  return db.prepare('SELECT * FROM published_events ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(limit, offset);
+  return db.prepare(`
+    SELECT pe.*, c.pubkey as conn_pubkey
+    FROM published_events pe
+    LEFT JOIN connections c ON pe.connection_id = c.id
+    ORDER BY pe.logged_at DESC LIMIT ? OFFSET ?
+  `).all(limit, offset);
 }
 
 function getSubscriptions(limit, offset) {
-  return db.prepare('SELECT * FROM subscriptions ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(limit, offset);
+  return db.prepare(`
+    SELECT s.*, c.pubkey
+    FROM subscriptions s
+    LEFT JOIN connections c ON s.connection_id = c.id
+    ORDER BY s.logged_at DESC LIMIT ? OFFSET ?
+  `).all(limit, offset);
 }
 
 function getTopIps(limit) {
@@ -149,10 +177,104 @@ function getActivity() {
   return { connections, events };
 }
 
+// --- Pubkey queries ---
+
+function getPubkeys(limit, offset) {
+  return db.prepare(`
+    SELECT
+      pe.pubkey,
+      COUNT(DISTINCT pe.id) as event_count,
+      COUNT(DISTINCT s.id) as sub_count,
+      COUNT(DISTINCT pe.ip) as event_ips,
+      COUNT(DISTINCT c.id) as connections,
+      MIN(pe.logged_at) as first_seen,
+      MAX(pe.logged_at) as last_seen
+    FROM published_events pe
+    LEFT JOIN connections c ON c.pubkey = pe.pubkey
+    LEFT JOIN subscriptions s ON s.connection_id = c.id
+    WHERE pe.pubkey IS NOT NULL
+    GROUP BY pe.pubkey
+    ORDER BY last_seen DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
+}
+
+function getPubkeyDetail(pubkey) {
+  const summary = db.prepare(`
+    SELECT
+      pubkey,
+      COUNT(DISTINCT id) as event_count,
+      COUNT(DISTINCT ip) as ips_used,
+      MIN(logged_at) as first_seen,
+      MAX(logged_at) as last_seen
+    FROM published_events
+    WHERE pubkey = ?
+    GROUP BY pubkey
+  `).get(pubkey);
+
+  if (!summary) return null;
+
+  const connections = db.prepare(`
+    SELECT COUNT(DISTINCT id) as c FROM connections WHERE pubkey = ?
+  `).get(pubkey).c;
+
+  const subscriptions = db.prepare(`
+    SELECT COUNT(DISTINCT s.id) as c
+    FROM subscriptions s
+    JOIN connections c ON s.connection_id = c.id
+    WHERE c.pubkey = ?
+  `).get(pubkey).c;
+
+  const ips = db.prepare(`
+    SELECT DISTINCT ip FROM (
+      SELECT ip FROM published_events WHERE pubkey = ?
+      UNION
+      SELECT ip FROM connections WHERE pubkey = ?
+    )
+  `).all(pubkey, pubkey);
+
+  const kinds = db.prepare(`
+    SELECT kind, COUNT(*) as count
+    FROM published_events
+    WHERE pubkey = ?
+    GROUP BY kind ORDER BY count DESC
+  `).all(pubkey);
+
+  return { ...summary, connections, subscriptions, ips: ips.map(r => r.ip), kinds };
+}
+
+function getPubkeyEvents(pubkey, limit, offset) {
+  return db.prepare(`
+    SELECT * FROM published_events
+    WHERE pubkey = ?
+    ORDER BY logged_at DESC LIMIT ? OFFSET ?
+  `).all(pubkey, limit, offset);
+}
+
+function getPubkeySubscriptions(pubkey, limit, offset) {
+  return db.prepare(`
+    SELECT s.*, c.ip, c.pubkey
+    FROM subscriptions s
+    JOIN connections c ON s.connection_id = c.id
+    WHERE c.pubkey = ?
+    ORDER BY s.logged_at DESC LIMIT ? OFFSET ?
+  `).all(pubkey, limit, offset);
+}
+
+function getPubkeyIps(pubkey) {
+  return db.prepare(`
+    SELECT ip, COUNT(DISTINCT id) as connections, MIN(connected_at) as first_seen, MAX(connected_at) as last_seen
+    FROM connections
+    WHERE pubkey = ?
+    GROUP BY ip ORDER BY last_seen DESC
+  `).all(pubkey);
+}
+
 module.exports = {
   init,
   logConnection,
   logDisconnection,
+  updateConnectionPubkey,
   logPublishedEvent,
   logSubscription,
   logSubscriptionClose,
@@ -162,4 +284,9 @@ module.exports = {
   getSubscriptions,
   getTopIps,
   getActivity,
+  getPubkeys,
+  getPubkeyDetail,
+  getPubkeyEvents,
+  getPubkeySubscriptions,
+  getPubkeyIps,
 };

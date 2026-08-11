@@ -48,7 +48,7 @@
   }
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 12px;
     margin-bottom: 24px;
   }
@@ -59,8 +59,8 @@
     padding: 16px;
     text-align: center;
   }
-  .stat-card .value { font-size: 2rem; font-weight: 700; color: var(--accent); }
-  .stat-card .label { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+  .stat-card .value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+  .stat-card .label { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
   .chart-container {
     background: var(--card);
     border: 1px solid var(--border);
@@ -112,6 +112,8 @@
   tr:hover { background: rgba(255,255,255,0.03); }
   .ip { font-family: monospace; color: var(--accent2); }
   .pubkey { font-family: monospace; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  .pubkey-link { font-family: monospace; color: var(--accent2); cursor: pointer; text-decoration: underline; }
+  .pubkey-link:hover { color: var(--accent); }
   .kind-badge {
     display: inline-block;
     padding: 2px 8px;
@@ -133,6 +135,25 @@
   .duration { color: var(--muted); font-size: 0.78rem; }
   a { color: var(--accent2); text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .detail-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .detail-card h2 { font-size: 1rem; margin-bottom: 12px; }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  }
+  .detail-item { font-size: 0.85rem; }
+  .detail-item .key { color: var(--muted); }
+  .detail-item .val { color: var(--text); font-family: monospace; }
+  .back-link { cursor: pointer; color: var(--accent2); margin-bottom: 12px; display: inline-block; font-size: 0.85rem; }
+  .kind-list { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ip-list { display: flex; flex-direction: column; gap: 4px; font-family: monospace; font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -156,24 +177,23 @@
   <div class="tab active" data-tab="connections">Connections</div>
   <div class="tab" data-tab="events">Published Events</div>
   <div class="tab" data-tab="subscriptions">Subscriptions</div>
+  <div class="tab" data-tab="users">Users</div>
   <div class="tab" data-tab="ips">Top IPs</div>
 </div>
 
-<div class="table-wrap" id="table-wrap"></div>
+<div id="content-area">
+  <div class="table-wrap" id="table-wrap"></div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 const API_BASE = '/api';
 let currentTab = 'connections';
+let selectedPubkey = null;
 let chart = null;
 
-function getToken() {
-  return localStorage.getItem('honey_token') || '';
-}
-
-function setToken(t) {
-  localStorage.setItem('honey_token', t);
-}
+function getToken() { return localStorage.getItem('honey_token') || ''; }
+function setToken(t) { localStorage.setItem('honey_token', t); }
 
 async function api(path) {
   const token = getToken();
@@ -201,21 +221,9 @@ function fmtDuration(connAt, discAt) {
   return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
 }
 
-function kindClass(kind) {
-  return 'kind-' + (kind || '0');
-}
-
-function truncate(s, n) {
-  if (!s) return '—';
-  return s.length > n ? s.slice(0, n) + '…' : s;
-}
-
-function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = String(s);
-  return d.innerHTML;
-}
+function kindClass(kind) { return 'kind-' + (kind || '0'); }
+function truncate(s, n) { return !s ? '—' : (s.length > n ? s.slice(0, n) + '…' : s); }
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
 
 async function loadStats() {
   try {
@@ -225,9 +233,10 @@ async function loadStats() {
       <div class="stat-card"><div class="value">${s.uniqueIps.toLocaleString()}</div><div class="label">Unique IPs</div></div>
       <div class="stat-card"><div class="value">${s.totalEvents.toLocaleString()}</div><div class="label">Published Events</div></div>
       <div class="stat-card"><div class="value">${s.totalSubscriptions.toLocaleString()}</div><div class="label">Subscriptions</div></div>
+      <div class="stat-card"><div class="value" style="color:#58a6ff">${s.uniquePubkeys.toLocaleString()}</div><div class="label">Unique Pubkeys</div></div>
       <div class="stat-card"><div class="value" style="color:#2ea043">${s.activeConnections.toLocaleString()}</div><div class="label">Active Now</div></div>
     `;
-  } catch (e) { /* token prompt shown */ }
+  } catch (e) {}
 }
 
 async function loadChart() {
@@ -236,7 +245,6 @@ async function loadChart() {
     const labels = [...new Set([...data.connections.map(d => d.t), ...data.events.map(d => d.t)])].sort();
     const connMap = Object.fromEntries(data.connections.map(d => [d.t, d.c]));
     const eventMap = Object.fromEntries(data.events.map(d => [d.t, d.c]));
-
     const ctx = document.getElementById('chart').getContext('2d');
     if (chart) chart.destroy();
     chart = new Chart(ctx, {
@@ -244,13 +252,12 @@ async function loadChart() {
       data: {
         labels: labels.map(l => l.slice(5, 16)),
         datasets: [
-          { label: 'Connections', data: labels.map(l => connMap[l] || 0), borderColor: '#f0c040', backgroundColor: '#f0c040221', fill: true, tension: 0.3 },
-          { label: 'Events', data: labels.map(l => eventMap[l] || 0), borderColor: '#58a6ff', backgroundColor: '#58a6ff221', fill: true, tension: 0.3 },
+          { label: 'Connections', data: labels.map(l => connMap[l] || 0), borderColor: '#f0c040', backgroundColor: '#f0c04022', fill: true, tension: 0.3 },
+          { label: 'Events', data: labels.map(l => eventMap[l] || 0), borderColor: '#58a6ff', backgroundColor: '#58a6ff22', fill: true, tension: 0.3 },
         ]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         plugins: { legend: { labels: { color: '#8b949e' } } },
         scales: {
           x: { ticks: { color: '#8b949e', maxTicksLimit: 12 }, grid: { color: '#21262d' } },
@@ -261,58 +268,155 @@ async function loadChart() {
   } catch (e) {}
 }
 
+function showPubkeyDetail(pubkey) {
+  selectedPubkey = pubkey;
+  loadTable();
+}
+
+function backToList() {
+  selectedPubkey = null;
+  loadTable();
+}
+
 async function loadTable() {
+  const area = document.getElementById('content-area');
+
+  // Pubkey detail view
+  if (currentTab === 'users' && selectedPubkey) {
+    try {
+      const d = await api('/pubkeys/' + encodeURIComponent(selectedPubkey));
+      area.innerHTML = `
+        <div class="back-link" onclick="backToList()">← Back to Users</div>
+        <div class="detail-card">
+          <h2>User <span style="font-family:monospace;color:var(--accent2);font-size:0.82rem">${esc(selectedPubkey)}</span></h2>
+          <div class="detail-grid">
+            <div class="detail-item"><span class="key">First seen:</span> <span class="val">${fmtTime(d.first_seen)}</span></div>
+            <div class="detail-item"><span class="key">Last seen:</span> <span class="val">${fmtTime(d.last_seen)}</span></div>
+            <div class="detail-item"><span class="key">Events published:</span> <span class="val">${d.event_count}</span></div>
+            <div class="detail-item"><span class="key">Subscriptions:</span> <span class="val">${d.subscriptions}</span></div>
+            <div class="detail-item"><span class="key">Connections:</span> <span class="val">${d.connections}</span></div>
+            <div class="detail-item"><span class="key">IPs used:</span> <span class="val">${d.ips_used}</span></div>
+          </div>
+          <div style="margin-top:12px"><span class="key" style="font-size:0.85rem">Kinds:</span>
+            <div class="kind-list" style="margin-top:6px">
+              ${d.kinds.map(k => `<span class="kind-badge ${kindClass(k.kind)}">${k.kind}: ${k.count}</span>`).join('')}
+            </div>
+          </div>
+          <div style="margin-top:12px"><span class="key" style="font-size:0.85rem">IPs:</span>
+            <div class="ip-list" style="margin-top:6px">${d.ips.map(ip => `<span>${esc(ip)}</span>`).join('')}</div>
+          </div>
+        </div>
+      `;
+
+      // Load events + subscriptions side by side
+      const [events, subs] = await Promise.all([
+        api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/events?limit=50'),
+        api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/subscriptions?limit=50'),
+      ]);
+
+      let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+
+      // Events
+      html += `<div class="table-wrap"><table><thead><tr><th>Kind</th><th>IP</th><th>Content Len</th><th>Time</th></tr></thead><tbody>`;
+      if (events.length) {
+        html += events.map(r => `<tr>
+          <td><span class="kind-badge ${kindClass(r.kind)}">${r.kind}</span></td>
+          <td class="ip">${esc(r.ip)}</td>
+          <td>${r.content_len || 0}</td>
+          <td>${fmtTime(r.logged_at)}</td>
+        </tr>`).join('');
+      } else {
+        html += '<tr><td colspan="4" class="empty">No events</td></tr>';
+      }
+      html += `</tbody></table></div>`;
+
+      // Subscriptions
+      html += `<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>IP</th><th>Filters</th><th>Time</th></tr></thead><tbody>`;
+      if (subs.length) {
+        html += subs.map(r => `<tr>
+          <td class="pubkey">${esc(truncate(r.subscription_id, 20))}</td>
+          <td class="ip">${esc(r.ip)}</td>
+          <td class="filters-cell" title="${esc(r.filters)}">${esc(truncate(r.filters, 60))}</td>
+          <td>${fmtTime(r.logged_at)}</td>
+        </tr>`).join('');
+      } else {
+        html += '<tr><td colspan="4" class="empty">No subscriptions</td></tr>';
+      }
+      html += `</tbody></table></div></div>`;
+
+      area.innerHTML += html;
+    } catch (e) {
+      area.innerHTML = '<div class="empty">Error loading pubkey detail</div>';
+    }
+    return;
+  }
+
   const wrap = document.getElementById('table-wrap');
+  if (!wrap) {
+    area.innerHTML = '<div class="table-wrap" id="table-wrap"></div>';
+  }
+
   try {
     if (currentTab === 'connections') {
       const rows = await api('/connections?limit=100');
-      if (!rows.length) { wrap.innerHTML = '<div class="empty">No connections yet</div>'; return; }
-      wrap.innerHTML = `<table><thead><tr>
-        <th>ID</th><th>IP</th><th>User Agent</th><th>Connected</th><th>Duration</th>
-      </tr></thead><tbody>${rows.map(r => `<tr>
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr>
+        <th>ID</th><th>IP</th><th>Pubkey</th><th>User Agent</th><th>Connected</th><th>Duration</th>
+      </tr></thead><tbody>${rows.length ? rows.map(r => `<tr>
         <td>#${r.id}</td>
         <td class="ip">${esc(r.ip)}</td>
-        <td style="color:var(--muted);font-size:0.78rem">${esc(truncate(r.user_agent, 50))}</td>
+        <td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 16))}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="color:var(--muted);font-size:0.78rem">${esc(truncate(r.user_agent, 40))}</td>
         <td>${fmtTime(r.connected_at)}</td>
         <td class="duration">${fmtDuration(r.connected_at, r.disconnected_at)}</td>
-      </tr>`).join('')}</tbody></table>`;
+      </tr>`).join('') : '<tr><td colspan="6" class="empty">No connections yet</td></tr>'}</tbody></table></div>`;
     } else if (currentTab === 'events') {
       const rows = await api('/events?limit=100');
-      if (!rows.length) { wrap.innerHTML = '<div class="empty">No published events yet</div>'; return; }
-      wrap.innerHTML = `<table><thead><tr>
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr>
         <th>IP</th><th>Pubkey</th><th>Kind</th><th>Event ID</th><th>Tags</th><th>Content Len</th><th>Time</th>
-      </tr></thead><tbody>${rows.map(r => `<tr>
+      </tr></thead><tbody>${rows.length ? rows.map(r => `<tr>
         <td class="ip">${esc(r.ip)}</td>
-        <td class="pubkey" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 16))}</td>
+        <td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 16))}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
         <td><span class="kind-badge ${kindClass(r.kind)}">${r.kind}</span></td>
         <td class="pubkey" title="${esc(r.event_id)}">${esc(truncate(r.event_id, 16))}</td>
         <td style="color:var(--muted);font-size:0.78rem">${(() => { try { return JSON.parse(r.tags).length; } catch { return 0; } })()}</td>
         <td>${r.content_len || 0}</td>
         <td>${fmtTime(r.logged_at)}</td>
-      </tr>`).join('')}</tbody></table>`;
+      </tr>`).join('') : '<tr><td colspan="7" class="empty">No published events yet</td></tr>'}</tbody></table></div>`;
     } else if (currentTab === 'subscriptions') {
       const rows = await api('/subscriptions?limit=100');
-      if (!rows.length) { wrap.innerHTML = '<div class="empty">No subscriptions yet</div>'; return; }
-      wrap.innerHTML = `<table><thead><tr>
-        <th>IP</th><th>Sub ID</th><th>Filters</th><th>Time</th>
-      </tr></thead><tbody>${rows.map(r => `<tr>
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr>
+        <th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th>
+      </tr></thead><tbody>${rows.length ? rows.map(r => `<tr>
         <td class="ip">${esc(r.ip)}</td>
+        <td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 16))}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
         <td class="pubkey">${esc(truncate(r.subscription_id, 20))}</td>
         <td class="filters-cell" title="${esc(r.filters)}">${esc(truncate(r.filters, 80))}</td>
         <td>${fmtTime(r.logged_at)}</td>
-      </tr>`).join('')}</tbody></table>`;
+      </tr>`).join('') : '<tr><td colspan="5" class="empty">No subscriptions yet</td></tr>'}</tbody></table></div>`;
+    } else if (currentTab === 'users') {
+      const rows = await api('/pubkeys?limit=100');
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr>
+        <th>Pubkey</th><th>Events</th><th>Subs</th><th>Connections</th><th>IPs</th><th>First Seen</th><th>Last Seen</th>
+      </tr></thead><tbody>${rows.length ? rows.map(r => `<tr>
+        <td><span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 20))}</span></td>
+        <td>${r.event_count || 0}</td>
+        <td>${r.sub_count || 0}</td>
+        <td>${r.connections || 0}</td>
+        <td>${r.event_ips || 0}</td>
+        <td>${fmtTime(r.first_seen)}</td>
+        <td>${fmtTime(r.last_seen)}</td>
+      </tr>`).join('') : '<tr><td colspan="7" class="empty">No known pubkeys yet</td></tr>'}</tbody></table></div>`;
     } else if (currentTab === 'ips') {
       const rows = await api('/top-ips?limit=50');
-      if (!rows.length) { wrap.innerHTML = '<div class="empty">No data yet</div>'; return; }
-      wrap.innerHTML = `<table><thead><tr>
+      area.innerHTML = `<div class="table-wrap"><table><thead><tr>
         <th>#</th><th>IP</th><th>Connections</th><th>Events</th><th>Subscriptions</th>
-      </tr></thead><tbody>${rows.map((r, i) => `<tr>
+      </tr></thead><tbody>${rows.length ? rows.map((r, i) => `<tr>
         <td>${i + 1}</td>
         <td class="ip">${esc(r.ip)}</td>
         <td>${r.connections}</td>
         <td>${r.events}</td>
         <td>${r.subscriptions}</td>
-      </tr>`).join('')}</tbody></table>`;
+      </tr>`).join('') : '<tr><td colspan="5" class="empty">No data yet</td></tr>'}</tbody></table></div>`;
     }
   } catch (e) {}
 }
@@ -322,25 +426,20 @@ async function refresh() {
   document.getElementById('refresh-info').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 
-// Tab switching
 document.querySelectorAll('.tab').forEach(t => {
   t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
     currentTab = t.dataset.tab;
+    selectedPubkey = null;
     loadTable();
   });
 });
 
-// Token input
 const tokenInput = document.getElementById('token-input');
-tokenInput.addEventListener('change', () => {
-  setToken(tokenInput.value);
-  refresh();
-});
+tokenInput.addEventListener('change', () => { setToken(tokenInput.value); refresh(); });
 if (getToken()) tokenInput.style.display = 'block';
 
-// Initial load + auto-refresh
 refresh();
 setInterval(refresh, 30000);
 </script>
