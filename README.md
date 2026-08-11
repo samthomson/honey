@@ -50,7 +50,8 @@ SQLite database persists in a Docker named volume automatically.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `BACKEND_HOST` | `localhost:8008` | Host and port of the real relay |
+| `BACKEND_HOST` | `localhost:8008` | Host (and optional port) of the real relay |
+| `BACKEND_SCHEME` | `wss` | `wss` for TLS (default), `ws` for plain |
 | `ADMIN_TOKEN` | _(none)_ | Optional Bearer token to protect the admin API |
 
 ## Tech Stack

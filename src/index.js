@@ -8,8 +8,9 @@ const createAdminRouter = require('./admin');
 // --- Config ---
 // Single BACKEND_HOST:port — we derive ws:// and http:// from it
 const BACKEND_HOST = process.env.BACKEND_HOST || 'localhost:8008';
-const BACKEND_WS_URL = `ws://${BACKEND_HOST}`;
-const BACKEND_HTTP_URL = `http://${BACKEND_HOST}`;
+const BACKEND_SCHEME = process.env.BACKEND_SCHEME || 'wss'; // wss for TLS, ws for plain
+const BACKEND_WS_URL = `${BACKEND_SCHEME}://${BACKEND_HOST}`;
+const BACKEND_HTTP_URL = `http${BACKEND_SCHEME === 'wss' ? 's' : ''}://${BACKEND_HOST}`;
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const DATA_DIR = process.env.DATA_DIR || './data';

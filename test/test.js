@@ -77,6 +77,7 @@ fakeRelay.on('connection', (ws) => {
 
 // --- Start Honey ---
 process.env.BACKEND_HOST = `localhost:${FAKE_RELAY_PORT}`;
+process.env.BACKEND_SCHEME = 'ws'; // plain WS for local test relay
 process.env.PORT = String(HONEY_PORT);
 process.env.DATA_DIR = DATA_DIR;
 
