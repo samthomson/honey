@@ -315,7 +315,30 @@ function getActivity() {
 
 // --- Pubkey queries ---
 
-function getPubkeys(limit, offset) {
+function getPubkeys(limit, offset, filter) {
+  // filter: 'all' | 'publishers' | 'readers'
+  if (filter === 'readers') {
+    // Anonymous readers: connections with subscriptions but no published events and no pubkey
+    return db.prepare(`
+      SELECT
+        NULL as pubkey,
+        c.ip,
+        COUNT(DISTINCT c.id) as connections,
+        COUNT(DISTINCT s.id) as sub_count,
+        0 as event_count,
+        MIN(c.connected_at) as first_seen,
+        MAX(c.connected_at) as last_seen
+      FROM connections c
+      LEFT JOIN subscriptions s ON s.connection_id = c.id
+      WHERE c.pubkey IS NULL
+        AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)
+      GROUP BY c.ip
+      ORDER BY last_seen DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+  }
+
+  // publishers (default): all from published_events
   return db.prepare(`
     SELECT
       pe.pubkey,
@@ -333,6 +356,19 @@ function getPubkeys(limit, offset) {
     ORDER BY last_seen DESC
     LIMIT ? OFFSET ?
   `).all(limit, offset);
+}
+
+function getReaderStats() {
+  const totalReaders = db.prepare(`
+    SELECT COUNT(DISTINCT c.ip) as c
+    FROM connections c
+    WHERE c.pubkey IS NULL
+      AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)
+  `).get().c;
+
+  const totalPublishers = db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM published_events WHERE pubkey IS NOT NULL').get().c;
+
+  return { totalReaders, totalPublishers };
 }
 
 function getPubkeyDetail(pubkey) {
@@ -430,6 +466,7 @@ module.exports = {
   getTopIps,
   getActivity,
   getPubkeys,
+  getReaderStats,
   getPubkeyDetail,
   getPubkeyEvents,
   getPubkeySubscriptions,

@@ -40,7 +40,12 @@ function createAdminRouter() {
   router.get('/pubkeys', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(db.getPubkeys(limit, offset));
+    const filter = req.query.filter || 'publishers';
+    res.json(db.getPubkeys(limit, offset, filter));
+  });
+
+  router.get('/reader-stats', (req, res) => {
+    res.json(db.getReaderStats());
   });
 
   router.get('/pubkeys/:pubkey', (req, res) => {

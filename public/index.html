@@ -226,6 +226,7 @@
 const API_BASE = '/api';
 let currentTab = 'connections';
 let selectedPubkey = null;
+let userFilter = 'publishers'; // 'publishers' | 'readers'
 let chart = null;
 let map = null;
 let mapMarkers = [];
@@ -277,13 +278,13 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function loadStats() {
   try {
-    const s = await api('/stats');
+    const [s, rs] = await Promise.all([api('/stats'), api('/reader-stats')]);
     document.getElementById('stats').innerHTML = `
       <div class="stat-card"><div class="value">${s.totalConnections.toLocaleString()}</div><div class="label">Connections</div></div>
       <div class="stat-card"><div class="value">${s.uniqueIps.toLocaleString()}</div><div class="label">Unique IPs</div></div>
+      <div class="stat-card"><div class="value" style="color:#f0c040">${rs.totalPublishers.toLocaleString()}</div><div class="label">Publishers</div></div>
+      <div class="stat-card"><div class="value" style="color:#8b949e">${rs.totalReaders.toLocaleString()}</div><div class="label">Anon Readers</div></div>
       <div class="stat-card"><div class="value">${s.totalEvents.toLocaleString()}</div><div class="label">Events</div></div>
-      <div class="stat-card"><div class="value">${s.totalSubscriptions.toLocaleString()}</div><div class="label">Subs</div></div>
-      <div class="stat-card"><div class="value" style="color:#58a6ff">${s.uniquePubkeys.toLocaleString()}</div><div class="label">Pubkeys</div></div>
       <div class="stat-card"><div class="value" style="color:#2ea043">${s.activeConnections.toLocaleString()}</div><div class="label">Active</div></div>
     `;
   } catch (e) {}
@@ -326,6 +327,7 @@ function showPubkeyDetail(pubkey) {
   loadTable();
 }
 function backToList() { selectedPubkey = null; loadTable(); }
+function setUserFilter(f) { userFilter = f; selectedPubkey = null; loadTable(); }
 function showUserMap(pubkey) {
   selectedPubkey = pubkey;
   currentTab = 'map';
@@ -460,8 +462,27 @@ async function loadTable() {
       const rows = await api('/subscriptions?limit=100');
       area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>${rows.length ? rows.map(r => `<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,12))}</span>` : '<span style="color:var(--muted)">—</span>'}</td><td class="pubkey">${esc(truncate(r.subscription_id,16))}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(truncate(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No subs</td></tr>'}</tbody></table></div>`;
     } else if (currentTab === 'users') {
-      const rows = await api('/pubkeys?limit=100');
-      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pubkey</th><th>Ev</th><th>Sub</th><th>Conn</th><th>IPs</th><th>Last Seen</th><th></th></tr></thead><tbody>${rows.length ? rows.map(r => `<tr><td><span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,16))}</span></td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`).join('') : '<tr><td colspan="7" class="empty">No pubkeys</td></tr>'}</tbody></table></div>`;
+      const filterParam = userFilter === 'readers' ? '&filter=readers' : '';
+      const rows = await api('/pubkeys?limit=100' + filterParam);
+      let tableHtml;
+      if (userFilter === 'readers') {
+        tableHtml = `<div class="user-filter" style="margin-bottom:10px;display:flex;gap:6px">
+          <span class="tab" style="cursor:pointer" onclick="setUserFilter('publishers')">✍️ Publishers</span>
+          <span class="tab active" style="cursor:pointer">👁 Anonymous Readers</span>
+        </div>`;
+        tableHtml += `<div class="table-wrap"><table><thead><tr><th>IP</th><th>Subs</th><th>Conns</th><th>First Seen</th><th>Last Seen</th></tr></thead><tbody>`;
+        tableHtml += rows.length ? rows.map(r => `<tr><td class="ip">${esc(r.ip)}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${fmtTime(r.first_seen)}</td><td>${fmtTime(r.last_seen)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No anonymous readers</td></tr>';
+        tableHtml += `</tbody></table></div>`;
+      } else {
+        tableHtml = `<div class="user-filter" style="margin-bottom:10px;display:flex;gap:6px">
+          <span class="tab active" style="cursor:pointer">✍️ Publishers</span>
+          <span class="tab" style="cursor:pointer" onclick="setUserFilter('readers')">👁 Anonymous Readers</span>
+        </div>`;
+        tableHtml += `<div class="table-wrap"><table><thead><tr><th>Pubkey</th><th>Ev</th><th>Sub</th><th>Conn</th><th>IPs</th><th>Last Seen</th><th></th></tr></thead><tbody>`;
+        tableHtml += rows.length ? rows.map(r => `<tr><td><span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,16))}</span></td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`).join('') : '<tr><td colspan="7" class="empty">No publishers yet</td></tr>';
+        tableHtml += `</tbody></table></div>`;
+      }
+      area.innerHTML = tableHtml;
     } else if (currentTab === 'ips') {
       const rows = await api('/top-ips?limit=50');
       area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>IP</th><th>Conn</th><th>Ev</th><th>Sub</th></tr></thead><tbody>${rows.length ? rows.map((r,i)=>`<tr><td>${i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No data</td></tr>'}</tbody></table></div>`;
@@ -481,6 +502,7 @@ document.querySelectorAll('.tab').forEach(t => {
     t.classList.add('active');
     currentTab = t.dataset.tab;
     selectedPubkey = null;
+    userFilter = 'publishers';
     loadTable();
   });
 });
