@@ -1,3 +1,4 @@
+const http = require('http');
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
@@ -61,9 +62,25 @@ function init(dataDir) {
       subscription_id TEXT NOT NULL,
       logged_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS ip_geo (
+      ip TEXT PRIMARY KEY,
+      country TEXT,
+      country_code TEXT,
+      region TEXT,
+      city TEXT,
+      lat REAL,
+      lon REAL,
+      isp TEXT,
+      org TEXT,
+      "as" TEXT,
+      proxy INTEGER DEFAULT 0,
+      hosting INTEGER DEFAULT 0,
+      geocoded_at INTEGER NOT NULL
+    );
   `);
 
-  // --- Migrations (additive, safe to re-run) ---
+  // --- Migrations ---
   try { db.exec('ALTER TABLE connections ADD COLUMN pubkey TEXT'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_conn_pubkey ON connections(pubkey)'); } catch {}
 }
@@ -92,7 +109,6 @@ function logPublishedEvent(connId, ip, event) {
     event.tags, event.content_len, Math.floor(Date.now() / 1000)
   );
 
-  // Associate pubkey to the connection
   if (event.pubkey) {
     updateConnectionPubkey(connId, event.pubkey);
   }
@@ -110,7 +126,138 @@ function logSubscriptionClose(connId, ip, subId) {
   ).run(connId, ip, subId, Math.floor(Date.now() / 1000));
 }
 
-// --- Query functions for admin API ---
+// --- Geo ---
+
+function getUncachedIps(ips) {
+  if (!ips.length) return [];
+  const placeholders = ips.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT ip FROM ip_geo WHERE ip IN (${placeholders})`).all(...ips);
+  const cached = new Set(rows.map(r => r.ip));
+  return ips.filter(ip => !cached.has(ip));
+}
+
+function cacheGeo(entry) {
+  db.prepare(`
+    INSERT OR REPLACE INTO ip_geo (ip, country, country_code, region, city, lat, lon, isp, org, as, proxy, hosting, geocoded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.ip, entry.country, entry.countryCode, entry.region, entry.city,
+    entry.lat, entry.lon, entry.isp, entry.org, entry.as,
+    entry.proxy ? 1 : 0, entry.hosting ? 1 : 0,
+    Math.floor(Date.now() / 1000)
+  );
+}
+
+function geocodeIps(ips) {
+  return new Promise((resolve) => {
+    const uncached = getUncachedIps(ips);
+    if (uncached.length === 0) {
+      resolve();
+      return;
+    }
+
+    // ip-api.com batch endpoint: POST JSON array, max 100
+    const batches = [];
+    for (let i = 0; i < uncached.length; i += 100) {
+      batches.push(uncached.slice(i, i + 100));
+    }
+
+    let remaining = batches.length;
+    if (remaining === 0) { resolve(); return; }
+
+    for (const batch of batches) {
+      const postData = JSON.stringify(batch.map(ip => ({
+        query: ip,
+        fields: 'status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting'
+      })));
+
+      const req = http.request({
+        hostname: 'ip-api.com',
+        path: '/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+      }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => body += chunk);
+        res.on('end', () => {
+          try {
+            const results = JSON.parse(body);
+            for (const r of results) {
+              if (r.status === 'success') {
+                cacheGeo({
+                  ip: r.query,
+                  country: r.country,
+                  countryCode: r.countryCode,
+                  region: r.region,
+                  city: r.city,
+                  lat: r.lat,
+                  lon: r.lon,
+                  isp: r.isp,
+                  org: r.org,
+                  as: r.as,
+                  proxy: r.proxy,
+                  hosting: r.hosting,
+                });
+              }
+            }
+          } catch {}
+          remaining--;
+          if (remaining === 0) resolve();
+        });
+      });
+
+      req.on('error', () => {
+        remaining--;
+        if (remaining === 0) resolve();
+      });
+
+      req.write(postData);
+      req.end();
+    }
+  });
+}
+
+function getGeoForIp(ip) {
+  return db.prepare('SELECT * FROM ip_geo WHERE ip = ?').get(ip);
+}
+
+function getGeoForIps(ips) {
+  if (!ips.length) return [];
+  const placeholders = ips.map(() => '?').join(',');
+  return db.prepare(`SELECT * FROM ip_geo WHERE ip IN (${placeholders})`).all(...ips);
+}
+
+function getAllGeo() {
+  return db.prepare(`
+    SELECT g.*,
+      (SELECT COUNT(DISTINCT c.id) FROM connections c WHERE c.ip = g.ip) as connections,
+      (SELECT COUNT(DISTINCT pe.id) FROM published_events pe WHERE pe.ip = g.ip) as events,
+      (SELECT COUNT(DISTINCT c.pubkey) FROM connections c WHERE c.ip = g.ip AND c.pubkey IS NOT NULL) as pubkeys
+    FROM ip_geo g
+    WHERE g.lat IS NOT NULL
+    ORDER BY connections DESC
+  `).all();
+}
+
+function getGeoForPubkey(pubkey) {
+  return db.prepare(`
+    SELECT g.*,
+      (SELECT COUNT(DISTINCT c.id) FROM connections c WHERE c.ip = g.ip AND c.pubkey = ?) as connections,
+      (SELECT COUNT(DISTINCT pe.id) FROM published_events pe WHERE pe.ip = g.ip AND pe.pubkey = ?) as events
+    FROM ip_geo g
+    WHERE g.lat IS NOT NULL AND g.ip IN (
+      SELECT DISTINCT ip FROM connections WHERE pubkey = ?
+      UNION
+      SELECT DISTINCT ip FROM published_events WHERE pubkey = ?
+    )
+    ORDER BY connections DESC
+  `).all(pubkey, pubkey, pubkey, pubkey);
+}
+
+// --- Query functions ---
 
 function getStats() {
   return {
@@ -214,9 +361,7 @@ function getPubkeyDetail(pubkey) {
 
   if (!summary) return null;
 
-  const connections = db.prepare(`
-    SELECT COUNT(DISTINCT id) as c FROM connections WHERE pubkey = ?
-  `).get(pubkey).c;
+  const connections = db.prepare('SELECT COUNT(DISTINCT id) as c FROM connections WHERE pubkey = ?').get(pubkey).c;
 
   const subscriptions = db.prepare(`
     SELECT COUNT(DISTINCT s.id) as c
@@ -244,11 +389,7 @@ function getPubkeyDetail(pubkey) {
 }
 
 function getPubkeyEvents(pubkey, limit, offset) {
-  return db.prepare(`
-    SELECT * FROM published_events
-    WHERE pubkey = ?
-    ORDER BY logged_at DESC LIMIT ? OFFSET ?
-  `).all(pubkey, limit, offset);
+  return db.prepare('SELECT * FROM published_events WHERE pubkey = ? ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(pubkey, limit, offset);
 }
 
 function getPubkeySubscriptions(pubkey, limit, offset) {
@@ -270,6 +411,21 @@ function getPubkeyIps(pubkey) {
   `).all(pubkey);
 }
 
+function getAllUniqueIps() {
+  return db.prepare('SELECT DISTINCT ip FROM connections').all().map(r => r.ip);
+}
+
+function getUniqueIpsForPubkey(pubkey) {
+  const rows = db.prepare(`
+    SELECT DISTINCT ip FROM (
+      SELECT ip FROM connections WHERE pubkey = ?
+      UNION
+      SELECT ip FROM published_events WHERE pubkey = ?
+    )
+  `).all(pubkey, pubkey);
+  return rows.map(r => r.ip);
+}
+
 module.exports = {
   init,
   logConnection,
@@ -289,4 +445,12 @@ module.exports = {
   getPubkeyEvents,
   getPubkeySubscriptions,
   getPubkeyIps,
+  // Geo
+  geocodeIps,
+  getGeoForIp,
+  getGeoForIps,
+  getAllGeo,
+  getGeoForPubkey,
+  getAllUniqueIps,
+  getUniqueIpsForPubkey,
 };

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🍯 Honey</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
     --bg: #0d1117;
@@ -114,13 +115,7 @@
   .pubkey { font-family: monospace; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
   .pubkey-link { font-family: monospace; color: var(--accent2); cursor: pointer; text-decoration: underline; }
   .pubkey-link:hover { color: var(--accent); }
-  .kind-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
-  }
+  .kind-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
   .kind-1 { background: #1f6feb22; color: #58a6ff; }
   .kind-3 { background: #2ea04322; color: #2ea043; }
   .kind-4 { background: #f8514922; color: #f85149; }
@@ -143,17 +138,18 @@
     margin-bottom: 16px;
   }
   .detail-card h2 { font-size: 1rem; margin-bottom: 12px; }
-  .detail-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-  }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
   .detail-item { font-size: 0.85rem; }
   .detail-item .key { color: var(--muted); }
   .detail-item .val { color: var(--text); font-family: monospace; }
   .back-link { cursor: pointer; color: var(--accent2); margin-bottom: 12px; display: inline-block; font-size: 0.85rem; }
   .kind-list { display: flex; gap: 8px; flex-wrap: wrap; }
   .ip-list { display: flex; flex-direction: column; gap: 4px; font-family: monospace; font-size: 0.82rem; }
+  #map-container { height: 500px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+  .map-popup { font-size: 0.82rem; line-height: 1.5; }
+  .map-popup strong { color: var(--accent); }
+  .map-popup .mp-ip { font-family: monospace; color: var(--accent2); }
+  .map-popup .mp-detail { color: var(--muted); font-size: 0.75rem; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -178,6 +174,7 @@
   <div class="tab" data-tab="events">Published Events</div>
   <div class="tab" data-tab="subscriptions">Subscriptions</div>
   <div class="tab" data-tab="users">Users</div>
+  <div class="tab" data-tab="map">🌍 Map</div>
   <div class="tab" data-tab="ips">Top IPs</div>
 </div>
 
@@ -186,11 +183,14 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const API_BASE = '/api';
 let currentTab = 'connections';
 let selectedPubkey = null;
 let chart = null;
+let map = null;
+let mapMarkers = [];
 
 function getToken() { return localStorage.getItem('honey_token') || ''; }
 function setToken(t) { localStorage.setItem('honey_token', t); }
@@ -270,6 +270,9 @@ async function loadChart() {
 
 function showPubkeyDetail(pubkey) {
   selectedPubkey = pubkey;
+  currentTab = 'users';
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelector('.tab[data-tab="users"]').classList.add('active');
   loadTable();
 }
 
@@ -278,8 +281,129 @@ function backToList() {
   loadTable();
 }
 
+function showUserMap(pubkey) {
+  selectedPubkey = pubkey;
+  currentTab = 'map';
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelector('.tab[data-tab="map"]').classList.add('active');
+  loadTable();
+}
+
+// --- Map rendering ---
+function destroyMap() {
+  if (map) {
+    map.remove();
+    map = null;
+    mapMarkers = [];
+  }
+}
+
+function initMap() {
+  if (map) return;
+  map = L.map('map-container', { worldCopyJump: true }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    maxZoom: 18,
+  }).addTo(map);
+}
+
+function addMapMarker(lat, lon, popupHtml) {
+  const marker = L.circleMarker([lat, lon], {
+    radius: 6,
+    fillColor: '#f0c040',
+    color: '#f0c040',
+    weight: 1,
+    opacity: 0.8,
+    fillOpacity: 0.6,
+  }).addTo(map);
+  marker.bindPopup(popupHtml);
+  mapMarkers.push(marker);
+}
+
+async function loadMap() {
+  const area = document.getElementById('content-area');
+  destroyMap();
+
+  if (selectedPubkey) {
+    area.innerHTML = `
+      <div class="back-link" onclick="selectedPubkey=null; loadMap();">← Back to global map</div>
+      <div class="detail-card">
+        <h2>Map for <span style="font-family:monospace;color:var(--accent2);font-size:0.82rem">${esc(truncate(selectedPubkey, 24))}</span></h2>
+        <div id="map-container" style="height:450px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
+      </div>
+    `;
+  } else {
+    area.innerHTML = `
+      <div class="detail-card">
+        <h2>🌍 Global Connection Map</h2>
+        <div id="map-container" style="height:500px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
+      </div>
+    `;
+  }
+
+  await sleep(100); // let DOM settle
+  initMap();
+
+  try {
+    let geoData;
+    if (selectedPubkey) {
+      geoData = await api('/geo/pubkey/' + encodeURIComponent(selectedPubkey));
+    } else {
+      geoData = await api('/geo/all');
+    }
+
+    if (!geoData || geoData.length === 0) {
+      area.innerHTML += '<div class="empty" style="padding:20px">No geolocation data yet. Geocoding happens on first API call.</div>';
+      return;
+    }
+
+    const bounds = [];
+    for (const g of geoData) {
+      if (!g.lat || !g.lon) continue;
+      const lat = g.lat, lon = g.lon;
+      bounds.push([lat, lon]);
+
+      const popupClass = g.proxy ? 'var(--danger)' : (g.hosting ? 'var(--muted)' : 'var(--accent)');
+      const popupHtml = `
+        <div class="map-popup">
+          <strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br>
+          <span class="mp-ip">${esc(g.ip)}</span><br>
+          <span>Connections: <strong>${g.connections || 0}</strong></span><br>
+          <span>Events: <strong>${g.events || 0}</strong></span><br>
+          ${g.pubkeys ? `<span>Pubkeys: <strong>${g.pubkeys}</strong></span><br>` : ''}
+          <div class="mp-detail">${esc(g.isp)}${g.proxy ? ' · 🛡 Proxy' : ''}${g.hosting ? ' · 🖥 Hosting' : ''}</div>
+        </div>
+      `;
+
+      const radius = Math.min(4 + (g.connections || 1) * 2, 16);
+      const marker = L.circleMarker([lat, lon], {
+        radius: radius,
+        fillColor: g.proxy ? '#f85149' : (g.hosting ? '#8b949e' : '#f0c040'),
+        color: g.proxy ? '#f85149' : (g.hosting ? '#8b949e' : '#f0c040'),
+        weight: 1, opacity: 0.8, fillOpacity: 0.5,
+      }).addTo(map);
+      marker.bindPopup(popupHtml);
+      mapMarkers.push(marker);
+    }
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
+    }
+  } catch (e) {
+    console.error('Map load error:', e);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 async function loadTable() {
   const area = document.getElementById('content-area');
+
+  // Map tab
+  if (currentTab === 'map') {
+    await loadMap();
+    return;
+  }
 
   // Pubkey detail view
   if (currentTab === 'users' && selectedPubkey) {
@@ -305,10 +429,12 @@ async function loadTable() {
           <div style="margin-top:12px"><span class="key" style="font-size:0.85rem">IPs:</span>
             <div class="ip-list" style="margin-top:6px">${d.ips.map(ip => `<span>${esc(ip)}</span>`).join('')}</div>
           </div>
+          <div style="margin-top:16px">
+            <button onclick="showUserMap('${esc(selectedPubkey)}')" style="background:var(--card);border:1px solid var(--accent2);color:var(--accent2);padding:8px 16px;border-radius:var(--radius);cursor:pointer;font-size:0.85rem">🌍 View IP Map</button>
+          </div>
         </div>
       `;
 
-      // Load events + subscriptions side by side
       const [events, subs] = await Promise.all([
         api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/events?limit=50'),
         api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/subscriptions?limit=50'),
@@ -316,7 +442,6 @@ async function loadTable() {
 
       let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
 
-      // Events
       html += `<div class="table-wrap"><table><thead><tr><th>Kind</th><th>IP</th><th>Content Len</th><th>Time</th></tr></thead><tbody>`;
       if (events.length) {
         html += events.map(r => `<tr>
@@ -330,7 +455,6 @@ async function loadTable() {
       }
       html += `</tbody></table></div>`;
 
-      // Subscriptions
       html += `<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>IP</th><th>Filters</th><th>Time</th></tr></thead><tbody>`;
       if (subs.length) {
         html += subs.map(r => `<tr>
@@ -351,11 +475,7 @@ async function loadTable() {
     return;
   }
 
-  const wrap = document.getElementById('table-wrap');
-  if (!wrap) {
-    area.innerHTML = '<div class="table-wrap" id="table-wrap"></div>';
-  }
-
+  // Standard table tabs
   try {
     if (currentTab === 'connections') {
       const rows = await api('/connections?limit=100');
@@ -396,7 +516,7 @@ async function loadTable() {
     } else if (currentTab === 'users') {
       const rows = await api('/pubkeys?limit=100');
       area.innerHTML = `<div class="table-wrap"><table><thead><tr>
-        <th>Pubkey</th><th>Events</th><th>Subs</th><th>Connections</th><th>IPs</th><th>First Seen</th><th>Last Seen</th>
+        <th>Pubkey</th><th>Events</th><th>Subs</th><th>Connections</th><th>IPs</th><th>First Seen</th><th>Last Seen</th><th></th>
       </tr></thead><tbody>${rows.length ? rows.map(r => `<tr>
         <td><span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey, 20))}</span></td>
         <td>${r.event_count || 0}</td>
@@ -405,7 +525,8 @@ async function loadTable() {
         <td>${r.event_ips || 0}</td>
         <td>${fmtTime(r.first_seen)}</td>
         <td>${fmtTime(r.last_seen)}</td>
-      </tr>`).join('') : '<tr><td colspan="7" class="empty">No known pubkeys yet</td></tr>'}</tbody></table></div>`;
+        <td><span style="cursor:pointer;font-size:1.1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="View map">🌍</span></td>
+      </tr>`).join('') : '<tr><td colspan="8" class="empty">No known pubkeys yet</td></tr>'}</tbody></table></div>`;
     } else if (currentTab === 'ips') {
       const rows = await api('/top-ips?limit=50');
       area.innerHTML = `<div class="table-wrap"><table><thead><tr>
@@ -422,7 +543,11 @@ async function loadTable() {
 }
 
 async function refresh() {
-  await Promise.allSettled([loadStats(), loadChart(), loadTable()]);
+  if (currentTab === 'map') {
+    await loadMap();
+  } else {
+    await Promise.allSettled([loadStats(), loadChart(), loadTable()]);
+  }
   document.getElementById('refresh-info').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 

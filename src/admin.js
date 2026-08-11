@@ -65,6 +65,30 @@ function createAdminRouter() {
     res.json(db.getPubkeyIps(req.params.pubkey));
   });
 
+  // --- Geo endpoints ---
+
+  // Trigger geocoding for all uncached IPs, return all geo data
+  router.get('/geo/all', async (req, res) => {
+    try {
+      const allIps = db.getAllUniqueIps();
+      await db.geocodeIps(allIps);
+      res.json(db.getAllGeo());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Geo for a specific pubkey's IPs
+  router.get('/geo/pubkey/:pubkey', async (req, res) => {
+    try {
+      const ips = db.getUniqueIpsForPubkey(req.params.pubkey);
+      await db.geocodeIps(ips);
+      res.json(db.getGeoForPubkey(req.params.pubkey));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 }
 
