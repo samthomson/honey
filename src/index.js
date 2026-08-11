@@ -58,6 +58,17 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 function getClientIp(req) {
+  // Cloudflare sets CF-Connecting-IP to the real client IP
+  const cfIp = req.headers['cf-connecting-ip'];
+  if (cfIp) {
+    return cfIp.trim();
+  }
+  // True-Client-IP (some CDNs/proxies)
+  const trueClientIp = req.headers['true-client-ip'];
+  if (trueClientIp) {
+    return trueClientIp.trim();
+  }
+  // X-Forwarded-For chain (first entry = original client)
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
     return xff.split(',')[0].trim();
