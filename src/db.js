@@ -1,4 +1,3 @@
-const http = require('http');
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
@@ -148,76 +147,66 @@ function cacheGeo(entry) {
   );
 }
 
-function geocodeIps(ips) {
-  return new Promise((resolve) => {
-    const uncached = getUncachedIps(ips);
-    if (uncached.length === 0) {
-      resolve();
-      return;
-    }
+async function geocodeIps(ips) {
+  const uncached = getUncachedIps(ips);
+  if (uncached.length === 0) return;
 
-    // ip-api.com batch endpoint: POST JSON array, max 100
-    const batches = [];
-    for (let i = 0; i < uncached.length; i += 100) {
-      batches.push(uncached.slice(i, i + 100));
-    }
+  console.log(`[geo] Geocoding ${uncached.length} IPs...`);
 
-    let remaining = batches.length;
-    if (remaining === 0) { resolve(); return; }
+  // Try batch first (max 100 per request, HTTP only on free tier)
+  for (let i = 0; i < uncached.length; i += 100) {
+    const batch = uncached.slice(i, i + 100);
+    const queries = batch.map(ip => ({
+      query: ip,
+      fields: 'status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting'
+    }));
 
-    for (const batch of batches) {
-      const postData = JSON.stringify(batch.map(ip => ({
-        query: ip,
-        fields: 'status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting'
-      })));
-
-      const req = http.request({
-        hostname: 'ip-api.com',
-        path: '/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query',
+    try {
+      const res = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData),
-        },
-      }, (res) => {
-        let body = '';
-        res.on('data', (chunk) => body += chunk);
-        res.on('end', () => {
-          try {
-            const results = JSON.parse(body);
-            for (const r of results) {
-              if (r.status === 'success') {
-                cacheGeo({
-                  ip: r.query,
-                  country: r.country,
-                  countryCode: r.countryCode,
-                  region: r.region,
-                  city: r.city,
-                  lat: r.lat,
-                  lon: r.lon,
-                  isp: r.isp,
-                  org: r.org,
-                  as: r.as,
-                  proxy: r.proxy,
-                  hosting: r.hosting,
-                });
-              }
-            }
-          } catch {}
-          remaining--;
-          if (remaining === 0) resolve();
-        });
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(queries),
+        signal: AbortSignal.timeout(10000),
       });
-
-      req.on('error', () => {
-        remaining--;
-        if (remaining === 0) resolve();
-      });
-
-      req.write(postData);
-      req.end();
+      const results = await res.json();
+      let cached = 0;
+      for (const r of results) {
+        if (r.status === 'success') {
+          cacheGeo({
+            ip: r.query, country: r.country, countryCode: r.countryCode,
+            region: r.region, city: r.city, lat: r.lat, lon: r.lon,
+            isp: r.isp, org: r.org, as: r.as,
+            proxy: r.proxy, hosting: r.hosting,
+          });
+          cached++;
+        }
+      }
+      console.log(`[geo] Batch OK: ${cached}/${batch.length} cached`);
+    } catch (err) {
+      console.error(`[geo] Batch failed (${err.message}), trying individual...`);
+      // Fallback: individual lookups via HTTPS (ipapi.co)
+      for (const ip of batch) {
+        try {
+          const res = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          const r = await res.json();
+          if (r.latitude && r.longitude) {
+            cacheGeo({
+              ip, country: r.country_name, countryCode: r.country_code,
+              region: r.region, city: r.city, lat: r.latitude, lon: r.longitude,
+              isp: r.org || r.asn, org: r.org, as: r.asn,
+              proxy: false, hosting: false,
+            });
+          }
+          // Rate limit: 1 req/sec on free tier
+          await new Promise(r => setTimeout(r, 1100));
+        } catch (err2) {
+          console.error(`[geo] Individual lookup failed for ${ip}: ${err2.message}`);
+        }
+      }
     }
-  });
+  }
 }
 
 function getGeoForIp(ip) {
