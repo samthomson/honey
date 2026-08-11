@@ -14,6 +14,7 @@ const BACKEND_HTTP_URL = `http${BACKEND_SCHEME === 'wss' ? 's' : ''}://${BACKEND
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const DATA_DIR = process.env.DATA_DIR || './data';
+const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
 const backendUrl = new URL(BACKEND_HTTP_URL);
 
@@ -57,23 +58,77 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
+// Cloudflare IPv4/IPv6 ranges (for detecting when socket IP is a CDN edge)
+const CF_RANGES = [
+  // IPv4
+  '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+  '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+  '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+];
+
+function ipToInt(ip) {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => isNaN(p))) return null;
+  return (parts[0] << 24) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+}
+
+function cidrMatch(ip, cidr) {
+  const [range, bits] = cidr.split('/');
+  const ipInt = ipToInt(ip);
+  const rangeInt = ipToInt(range);
+  if (ipInt === null || rangeInt === null) return false;
+  const mask = bits === '0' ? 0 : (0xFFFFFFFF << (32 - parseInt(bits))) >>> 0;
+  return (ipInt & mask) === (rangeInt & mask);
+}
+
+function isCloudflareIp(ip) {
+  // Strip IPv6-mapped IPv4
+  const clean = ip.replace(/^::ffff:/, '');
+  return CF_RANGES.some(cidr => cidrMatch(clean, cidr));
+}
+
 function getClientIp(req) {
-  // Cloudflare sets CF-Connecting-IP to the real client IP
+  const socketIp = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+
+  if (DEBUG) {
+    const relevantHeaders = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (k.includes('ip') || k.includes('forward') || k.includes('real') || k.includes('proxy')) {
+        relevantHeaders[k] = v;
+      }
+    }
+    console.log(`[debug] IP detection | socket: ${socketIp} | headers: ${JSON.stringify(relevantHeaders)}`);
+  }
+
+  // 1. Cloudflare's CF-Connecting-IP — always set when proxied through CF
   const cfIp = req.headers['cf-connecting-ip'];
   if (cfIp) {
     return cfIp.trim();
   }
-  // True-Client-IP (some CDNs/proxies)
+
+  // 2. True-Client-IP (some CDNs)
   const trueClientIp = req.headers['true-client-ip'];
   if (trueClientIp) {
     return trueClientIp.trim();
   }
-  // X-Forwarded-For chain (first entry = original client)
+
+  // 3. X-Forwarded-For chain — walk backwards to find first non-CDN IP
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
-    return xff.split(',')[0].trim();
+    const chain = xff.split(',').map(s => s.trim());
+    // If socket IP is Cloudflare, the XFF chain has the real client
+    // Walk from rightmost (closest to us) leftward, skipping CDN IPs
+    for (let i = chain.length - 1; i >= 0; i--) {
+      if (!isCloudflareIp(chain[i])) {
+        return chain[i];
+      }
+    }
+    // All entries are CDN — return leftmost (best guess)
+    return chain[0];
   }
-  return req.socket.remoteAddress || 'unknown';
+
+  return socketIp || 'unknown';
 }
 
 // --- HTTP proxy (NIP-11 + any other HTTP) ---
