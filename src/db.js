@@ -5,9 +5,7 @@ const path = require('path');
 let db;
 
 function init(dataDir) {
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
   db = new DatabaseSync(path.join(dataDir, 'honey.db'));
   db.exec('PRAGMA journal_mode = WAL');
@@ -34,6 +32,7 @@ function init(dataDir) {
       kind INTEGER,
       created_at INTEGER,
       tags TEXT,
+      content TEXT,
       content_len INTEGER,
       logged_at INTEGER NOT NULL
     );
@@ -77,16 +76,33 @@ function init(dataDir) {
       hosting INTEGER DEFAULT 0,
       geocoded_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS profiles (
+      pubkey TEXT PRIMARY KEY,
+      name TEXT,
+      display_name TEXT,
+      picture TEXT,
+      about TEXT,
+      nip05 TEXT,
+      website TEXT,
+      lud16 TEXT,
+      raw_json TEXT,
+      fetched_at INTEGER NOT NULL
+    );
   `);
 
   // --- Migrations ---
   try { db.exec('ALTER TABLE connections ADD COLUMN pubkey TEXT'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_conn_pubkey ON connections(pubkey)'); } catch {}
+  // Add content column to existing tables (migration)
+  try { db.exec('ALTER TABLE published_events ADD COLUMN content TEXT'); } catch {}
 }
 
+// ─── Connection logging ───
+
 function logConnection(ip, userAgent) {
-  const stmt = db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)');
-  return stmt.run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid;
+  return db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)')
+    .run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid;
 }
 
 function logDisconnection(connId) {
@@ -102,37 +118,121 @@ function updateConnectionPubkey(connId, pubkey) {
 
 function logPublishedEvent(connId, ip, event) {
   db.prepare(
-    'INSERT INTO published_events (connection_id, ip, event_id, pubkey, kind, created_at, tags, content_len, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO published_events (connection_id, ip, event_id, pubkey, kind, created_at, tags, content, content_len, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     connId, ip, event.event_id, event.pubkey, event.kind, event.created_at,
-    event.tags, event.content_len, Math.floor(Date.now() / 1000)
+    event.tags, event.content || '', event.content_len, Math.floor(Date.now() / 1000)
   );
-
-  if (event.pubkey) {
-    updateConnectionPubkey(connId, event.pubkey);
-  }
+  if (event.pubkey) updateConnectionPubkey(connId, event.pubkey);
 }
 
 function logSubscription(connId, ip, subId, filters) {
-  db.prepare(
-    'INSERT INTO subscriptions (connection_id, ip, subscription_id, filters, logged_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(connId, ip, subId, filters, Math.floor(Date.now() / 1000));
+  db.prepare('INSERT INTO subscriptions (connection_id, ip, subscription_id, filters, logged_at) VALUES (?, ?, ?, ?, ?)')
+    .run(connId, ip, subId, filters, Math.floor(Date.now() / 1000));
 }
 
 function logSubscriptionClose(connId, ip, subId) {
-  db.prepare(
-    'INSERT INTO subscription_closes (connection_id, ip, subscription_id, logged_at) VALUES (?, ?, ?, ?)'
-  ).run(connId, ip, subId, Math.floor(Date.now() / 1000));
+  db.prepare('INSERT INTO subscription_closes (connection_id, ip, subscription_id, logged_at) VALUES (?, ?, ?, ?)')
+    .run(connId, ip, subId, Math.floor(Date.now() / 1000));
 }
 
-// --- Geo ---
+// ─── Profiles ───
+
+function cacheProfile(pubkey, metadata) {
+  db.prepare(`
+    INSERT OR REPLACE INTO profiles (pubkey, name, display_name, picture, about, nip05, website, lud16, raw_json, fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    pubkey,
+    metadata.name || null,
+    metadata.display_name || null,
+    metadata.picture || null,
+    metadata.about || null,
+    metadata.nip05 || null,
+    metadata.website || null,
+    metadata.lud16 || null,
+    JSON.stringify(metadata),
+    Math.floor(Date.now() / 1000)
+  );
+}
+
+function getProfile(pubkey) {
+  return db.prepare('SELECT * FROM profiles WHERE pubkey = ?').get(pubkey);
+}
+
+function getProfiles(pubkeys) {
+  if (!pubkeys.length) return [];
+  const placeholders = pubkeys.map(() => '?').join(',');
+  return db.prepare(`SELECT * FROM profiles WHERE pubkey IN (${placeholders})`).all(...pubkeys);
+}
+
+function getStaleProfiles(pubkeys) {
+  // Return pubkeys that have no cached profile
+  if (!pubkeys.length) return [];
+  const placeholders = pubkeys.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT pubkey FROM profiles WHERE pubkey IN (${placeholders})`).all(...pubkeys);
+  const cached = new Set(rows.map(r => r.pubkey));
+  return [...new Set(pubkeys)].filter(pk => !cached.has(pk));
+}
+
+async function fetchProfilesFromRelay(pubkeys, relayUrl) {
+  const { WebSocket } = require('ws');
+  return new Promise((resolve) => {
+    const ws = new WebSocket(relayUrl);
+    const results = {};
+    let pending = new Set(pubkeys);
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (!settled) { settled = true; try { ws.close(); } catch {} resolve(results); }
+    }, 5000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify(['REQ', 'profiles-' + Date.now(), { kinds: [0], authors: pubkeys }]));
+    });
+
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg[0] === 'EVENT' && msg[2]?.pubkey && msg[2]?.kind === 0) {
+          try {
+            const meta = JSON.parse(msg[2].content);
+            cacheProfile(msg[2].pubkey, meta);
+            results[msg[2].pubkey] = meta;
+          } catch {}
+          pending.delete(msg[2].pubkey);
+          if (pending.size === 0 && !settled) {
+            settled = true;
+            clearTimeout(timeout);
+            ws.close();
+            resolve(results);
+          }
+        }
+        if (msg[0] === 'EOSE' && pending.size > 0 && !settled) {
+          // Give 1 more second for trailing events
+          setTimeout(() => {
+            if (!settled) { settled = true; clearTimeout(timeout); ws.close(); resolve(results); }
+          }, 1000);
+        }
+      } catch {}
+    });
+
+    ws.on('error', () => {
+      if (!settled) { settled = true; clearTimeout(timeout); resolve(results); }
+    });
+  });
+}
+
+// ─── Geo ───
+// Server-side geocoding using ip-api.com (primary) with proper error handling.
+// All results cached in ip_geo table. Called as background job, never blocks API responses.
 
 function getUncachedIps(ips) {
   if (!ips.length) return [];
   const placeholders = ips.map(() => '?').join(',');
   const rows = db.prepare(`SELECT ip FROM ip_geo WHERE ip IN (${placeholders})`).all(...ips);
   const cached = new Set(rows.map(r => r.ip));
-  return ips.filter(ip => !cached.has(ip));
+  return [...new Set(ips)].filter(ip => !cached.has(ip));
 }
 
 function cacheGeo(entry) {
@@ -150,16 +250,15 @@ function cacheGeo(entry) {
 let geocodingInProgress = false;
 
 async function geocodeIps(ips) {
-  if (geocodingInProgress) { console.log('[geo] Already in progress, skipping'); return; }
+  if (geocodingInProgress) return;
   const uncached = getUncachedIps(ips);
-  if (uncached.length === 0) return;
+  if (!uncached.length) return;
 
   geocodingInProgress = true;
-  console.log(`[geo] Geocoding ${uncached.length} uncached IPs...`);
+  console.log(`[geo] Geocoding ${uncached.length} IPs...`);
 
   try {
-    // Strategy 1: ip-api.com batch (HTTP, fast, up to 100 per request)
-    let batchWorked = false;
+    // ip-api.com batch: HTTP, up to 100 per request, free, reliable
     for (let i = 0; i < uncached.length; i += 100) {
       const batch = uncached.slice(i, i + 100);
       try {
@@ -169,6 +268,7 @@ async function geocodeIps(ips) {
           body: JSON.stringify(batch.map(ip => ({ query: ip }))),
           signal: AbortSignal.timeout(10000),
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const results = await res.json();
         let cached = 0;
         for (const r of results) {
@@ -176,81 +276,35 @@ async function geocodeIps(ips) {
             cacheGeo({
               ip: r.query, country: r.country, countryCode: r.countryCode,
               region: r.region, city: r.city, lat: r.lat, lon: r.lon,
-              isp: r.isp, org: r.org, as: r.as,
-              proxy: r.proxy, hosting: r.hosting,
+              isp: r.isp, org: r.org, as: r.as, proxy: r.proxy, hosting: r.hosting,
             });
             cached++;
           }
         }
-        console.log(`[geo] ip-api.com batch: ${cached}/${batch.length} cached`);
-        batchWorked = true;
+        console.log(`[geo] Batch ${Math.floor(i/100)+1}: ${cached}/${batch.length} cached`);
       } catch (err) {
-        console.error(`[geo] ip-api.com batch failed: ${err.message}`);
-      }
-    }
-    if (batchWorked) {
-      const remaining = getUncachedIps(uncached);
-      if (remaining.length === 0) { console.log('[geo] All cached via batch'); return; }
-    }
-
-    // Strategy 2: ipwho.is (HTTPS, free, no key, individual)
-    const remaining2 = getUncachedIps(uncached);
-    if (remaining2.length > 0) {
-      console.log(`[geo] Trying ipwho.is for ${remaining2.length} IPs...`);
-      let cached2 = 0;
-      for (const ip of remaining2) {
-        try {
-          const res = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
-            signal: AbortSignal.timeout(8000),
-          });
-          const r = await res.json();
-          if (r.success !== false && r.latitude) {
-            cacheGeo({
-              ip,
-              country: r.country, countryCode: r.country_code,
-              region: r.region, city: r.city,
-              lat: r.latitude, lon: r.longitude,
-              isp: r.connection?.isp || r.connection?.org,
-              org: r.connection?.org,
-              as: r.connection?.asn ? `AS${r.connection.asn}` : null,
-              proxy: !!(r.security?.proxy || r.security?.tor),
-              hosting: false,
-            });
-            cached2++;
+        console.error(`[geo] Batch failed: ${err.message}`);
+        // Fallback: ipwho.is (HTTPS, individual)
+        for (const ip of batch) {
+          try {
+            const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, { signal: AbortSignal.timeout(8000) });
+            const j = await r.json();
+            if (j.success !== false && j.latitude) {
+              cacheGeo({
+                ip, country: j.country, countryCode: j.country_code,
+                region: j.region, city: j.city, lat: j.latitude, lon: j.longitude,
+                isp: j.connection?.isp, org: j.connection?.org,
+                as: j.connection?.asn ? `AS${j.connection.asn}` : null,
+                proxy: !!(j.security?.proxy || j.security?.tor), hosting: false,
+              });
+            }
+          } catch (e) {
+            console.error(`[geo] ipwho.is failed for ${ip}: ${e.message}`);
           }
-        } catch {}
-      }
-      console.log(`[geo] ipwho.is: ${cached2}/${remaining2.length} cached`);
-    }
-
-    // Strategy 3: ipapi.co (HTTPS, 1 req/sec rate limit, last resort)
-    const remaining3 = getUncachedIps(uncached);
-    if (remaining3.length > 0) {
-      console.log(`[geo] Trying ipapi.co for ${remaining3.length} IPs...`);
-      for (const ip of remaining3) {
-        try {
-          const res = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
-            signal: AbortSignal.timeout(8000),
-          });
-          const r = await res.json();
-          if (r.latitude && r.longitude) {
-            cacheGeo({
-              ip, country: r.country_name, countryCode: r.country_code,
-              region: r.region, city: r.city,
-              lat: r.latitude, lon: r.longitude,
-              isp: r.org || r.asn, org: r.org, as: r.asn,
-              proxy: false, hosting: false,
-            });
-          }
-          await new Promise(resolve => setTimeout(resolve, 1100));
-        } catch (err) {
-          console.error(`[geo] ipapi.co failed for ${ip}: ${err.message}`);
         }
       }
     }
-
-    const finalUncached = getUncachedIps(uncached);
-    console.log(`[geo] Done. ${uncached.length - finalUncached.length}/${uncached.length} cached.`);
+    console.log(`[geo] Done. ${getUncachedIps(uncached).length === 0 ? 'All' : 'Partial'} cached.`);
   } finally {
     geocodingInProgress = false;
   }
@@ -260,21 +314,13 @@ function getGeoForIp(ip) {
   return db.prepare('SELECT * FROM ip_geo WHERE ip = ?').get(ip);
 }
 
-function getGeoForIps(ips) {
-  if (!ips.length) return [];
-  const placeholders = ips.map(() => '?').join(',');
-  return db.prepare(`SELECT * FROM ip_geo WHERE ip IN (${placeholders})`).all(...ips);
-}
-
 function getAllGeo() {
   return db.prepare(`
     SELECT g.*,
       (SELECT COUNT(DISTINCT c.id) FROM connections c WHERE c.ip = g.ip) as connections,
       (SELECT COUNT(DISTINCT pe.id) FROM published_events pe WHERE pe.ip = g.ip) as events,
       (SELECT COUNT(DISTINCT c.pubkey) FROM connections c WHERE c.ip = g.ip AND c.pubkey IS NOT NULL) as pubkeys
-    FROM ip_geo g
-    WHERE g.lat IS NOT NULL
-    ORDER BY connections DESC
+    FROM ip_geo g WHERE g.lat IS NOT NULL ORDER BY connections DESC
   `).all();
 }
 
@@ -283,17 +329,33 @@ function getGeoForPubkey(pubkey) {
     SELECT g.*,
       (SELECT COUNT(DISTINCT c.id) FROM connections c WHERE c.ip = g.ip AND c.pubkey = ?) as connections,
       (SELECT COUNT(DISTINCT pe.id) FROM published_events pe WHERE pe.ip = g.ip AND pe.pubkey = ?) as events
-    FROM ip_geo g
-    WHERE g.lat IS NOT NULL AND g.ip IN (
+    FROM ip_geo g WHERE g.lat IS NOT NULL AND g.ip IN (
       SELECT DISTINCT ip FROM connections WHERE pubkey = ?
-      UNION
-      SELECT DISTINCT ip FROM published_events WHERE pubkey = ?
-    )
-    ORDER BY connections DESC
+      UNION SELECT DISTINCT ip FROM published_events WHERE pubkey = ?
+    ) ORDER BY connections DESC
   `).all(pubkey, pubkey, pubkey, pubkey);
 }
 
-// --- Query functions ---
+function getGeoStats() {
+  const cached = db.prepare('SELECT COUNT(*) as c FROM ip_geo WHERE lat IS NOT NULL').get().c;
+  const total = db.prepare('SELECT COUNT(DISTINCT ip) as c FROM connections').get().c;
+  return { cached, total, uncached: Math.max(0, total - cached) };
+}
+
+function getAllUniqueIps() {
+  return db.prepare('SELECT DISTINCT ip FROM connections').all().map(r => r.ip);
+}
+
+function getUniqueIpsForPubkey(pubkey) {
+  return db.prepare(`
+    SELECT DISTINCT ip FROM (
+      SELECT ip FROM connections WHERE pubkey = ?
+      UNION SELECT ip FROM published_events WHERE pubkey = ?
+    )
+  `).all(pubkey, pubkey).map(r => r.ip);
+}
+
+// ─── Query functions ───
 
 function getStats() {
   return {
@@ -311,21 +373,11 @@ function getConnections(limit, offset) {
 }
 
 function getEvents(limit, offset) {
-  return db.prepare(`
-    SELECT pe.*, c.pubkey as conn_pubkey
-    FROM published_events pe
-    LEFT JOIN connections c ON pe.connection_id = c.id
-    ORDER BY pe.logged_at DESC LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  return db.prepare('SELECT * FROM published_events ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(limit, offset);
 }
 
 function getSubscriptions(limit, offset) {
-  return db.prepare(`
-    SELECT s.*, c.pubkey
-    FROM subscriptions s
-    LEFT JOIN connections c ON s.connection_id = c.id
-    ORDER BY s.logged_at DESC LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  return db.prepare('SELECT s.*, c.pubkey FROM subscriptions s LEFT JOIN connections c ON s.connection_id = c.id ORDER BY s.logged_at DESC LIMIT ? OFFSET ?').all(limit, offset);
 }
 
 function getTopIps(limit) {
@@ -334,130 +386,69 @@ function getTopIps(limit) {
       COUNT(DISTINCT c.id) as connections,
       (SELECT COUNT(*) FROM published_events WHERE ip = c.ip) as events,
       (SELECT COUNT(*) FROM subscriptions WHERE ip = c.ip) as subscriptions
-    FROM connections c
-    GROUP BY ip
-    ORDER BY connections DESC
-    LIMIT ?
+    FROM connections c GROUP BY ip ORDER BY connections DESC LIMIT ?
   `).all(limit);
 }
 
 function getActivity() {
-  const now = Math.floor(Date.now() / 1000);
-  const weekAgo = now - 7 * 24 * 60 * 60;
-
-  const connections = db.prepare(`
-    SELECT strftime('%Y-%m-%dT%H:00:00', connected_at, 'unixepoch') as t, COUNT(*) as c
-    FROM connections WHERE connected_at >= ?
-    GROUP BY t ORDER BY t
-  `).all(weekAgo);
-
-  const events = db.prepare(`
-    SELECT strftime('%Y-%m-%dT%H:00:00', logged_at, 'unixepoch') as t, COUNT(*) as c
-    FROM published_events WHERE logged_at >= ?
-    GROUP BY t ORDER BY t
-  `).all(weekAgo);
-
-  return { connections, events };
+  const weekAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
+  return {
+    connections: db.prepare(`SELECT strftime('%Y-%m-%dT%H:00:00', connected_at, 'unixepoch') as t, COUNT(*) as c FROM connections WHERE connected_at >= ? GROUP BY t ORDER BY t`).all(weekAgo),
+    events: db.prepare(`SELECT strftime('%Y-%m-%dT%H:00:00', logged_at, 'unixepoch') as t, COUNT(*) as c FROM published_events WHERE logged_at >= ? GROUP BY t ORDER BY t`).all(weekAgo),
+  };
 }
 
-// --- Pubkey queries ---
+// ─── Pubkey queries ───
 
 function getPubkeys(limit, offset, filter) {
-  // filter: 'all' | 'publishers' | 'readers'
   if (filter === 'readers') {
-    // Anonymous readers: connections with subscriptions but no published events and no pubkey
     return db.prepare(`
-      SELECT
-        NULL as pubkey,
-        c.ip,
+      SELECT NULL as pubkey, c.ip,
         COUNT(DISTINCT c.id) as connections,
-        COUNT(DISTINCT s.id) as sub_count,
-        0 as event_count,
-        MIN(c.connected_at) as first_seen,
-        MAX(c.connected_at) as last_seen
-      FROM connections c
-      LEFT JOIN subscriptions s ON s.connection_id = c.id
-      WHERE c.pubkey IS NULL
-        AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)
-      GROUP BY c.ip
-      ORDER BY last_seen DESC
-      LIMIT ? OFFSET ?
+        COUNT(DISTINCT s.id) as sub_count, 0 as event_count,
+        MIN(c.connected_at) as first_seen, MAX(c.connected_at) as last_seen
+      FROM connections c LEFT JOIN subscriptions s ON s.connection_id = c.id
+      WHERE c.pubkey IS NULL AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)
+      GROUP BY c.ip ORDER BY last_seen DESC LIMIT ? OFFSET ?
     `).all(limit, offset);
   }
-
-  // publishers (default): all from published_events
   return db.prepare(`
-    SELECT
-      pe.pubkey,
+    SELECT pe.pubkey,
       COUNT(DISTINCT pe.id) as event_count,
       COUNT(DISTINCT s.id) as sub_count,
       COUNT(DISTINCT pe.ip) as event_ips,
       COUNT(DISTINCT c.id) as connections,
-      MIN(pe.logged_at) as first_seen,
-      MAX(pe.logged_at) as last_seen
+      MIN(pe.logged_at) as first_seen, MAX(pe.logged_at) as last_seen
     FROM published_events pe
     LEFT JOIN connections c ON c.pubkey = pe.pubkey
     LEFT JOIN subscriptions s ON s.connection_id = c.id
     WHERE pe.pubkey IS NOT NULL
-    GROUP BY pe.pubkey
-    ORDER BY last_seen DESC
-    LIMIT ? OFFSET ?
+    GROUP BY pe.pubkey ORDER BY last_seen DESC LIMIT ? OFFSET ?
   `).all(limit, offset);
 }
 
 function getReaderStats() {
-  const totalReaders = db.prepare(`
-    SELECT COUNT(DISTINCT c.ip) as c
-    FROM connections c
-    WHERE c.pubkey IS NULL
-      AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)
-  `).get().c;
-
-  const totalPublishers = db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM published_events WHERE pubkey IS NOT NULL').get().c;
-
-  return { totalReaders, totalPublishers };
+  return {
+    totalReaders: db.prepare(`SELECT COUNT(DISTINCT c.ip) as c FROM connections c WHERE c.pubkey IS NULL AND EXISTS (SELECT 1 FROM subscriptions WHERE connection_id = c.id)`).get().c,
+    totalPublishers: db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM published_events WHERE pubkey IS NOT NULL').get().c,
+  };
 }
 
 function getPubkeyDetail(pubkey) {
   const summary = db.prepare(`
-    SELECT
-      pubkey,
-      COUNT(DISTINCT id) as event_count,
-      COUNT(DISTINCT ip) as ips_used,
-      MIN(logged_at) as first_seen,
-      MAX(logged_at) as last_seen
-    FROM published_events
-    WHERE pubkey = ?
-    GROUP BY pubkey
+    SELECT pubkey, COUNT(DISTINCT id) as event_count, COUNT(DISTINCT ip) as ips_used,
+      MIN(logged_at) as first_seen, MAX(logged_at) as last_seen
+    FROM published_events WHERE pubkey = ? GROUP BY pubkey
   `).get(pubkey);
-
   if (!summary) return null;
 
   const connections = db.prepare('SELECT COUNT(DISTINCT id) as c FROM connections WHERE pubkey = ?').get(pubkey).c;
+  const subscriptions = db.prepare(`SELECT COUNT(DISTINCT s.id) as c FROM subscriptions s JOIN connections c ON s.connection_id = c.id WHERE c.pubkey = ?`).get(pubkey).c;
+  const ips = db.prepare(`SELECT DISTINCT ip FROM (SELECT ip FROM published_events WHERE pubkey = ? UNION SELECT ip FROM connections WHERE pubkey = ?)`).all(pubkey, pubkey).map(r => r.ip);
+  const kinds = db.prepare(`SELECT kind, COUNT(*) as count FROM published_events WHERE pubkey = ? GROUP BY kind ORDER BY count DESC`).all(pubkey);
+  const profile = getProfile(pubkey);
 
-  const subscriptions = db.prepare(`
-    SELECT COUNT(DISTINCT s.id) as c
-    FROM subscriptions s
-    JOIN connections c ON s.connection_id = c.id
-    WHERE c.pubkey = ?
-  `).get(pubkey).c;
-
-  const ips = db.prepare(`
-    SELECT DISTINCT ip FROM (
-      SELECT ip FROM published_events WHERE pubkey = ?
-      UNION
-      SELECT ip FROM connections WHERE pubkey = ?
-    )
-  `).all(pubkey, pubkey);
-
-  const kinds = db.prepare(`
-    SELECT kind, COUNT(*) as count
-    FROM published_events
-    WHERE pubkey = ?
-    GROUP BY kind ORDER BY count DESC
-  `).all(pubkey);
-
-  return { ...summary, connections, subscriptions, ips: ips.map(r => r.ip), kinds };
+  return { ...summary, connections, subscriptions, ips, kinds, profile };
 }
 
 function getPubkeyEvents(pubkey, limit, offset) {
@@ -465,72 +456,25 @@ function getPubkeyEvents(pubkey, limit, offset) {
 }
 
 function getPubkeySubscriptions(pubkey, limit, offset) {
-  return db.prepare(`
-    SELECT s.*, c.ip, c.pubkey
-    FROM subscriptions s
-    JOIN connections c ON s.connection_id = c.id
-    WHERE c.pubkey = ?
-    ORDER BY s.logged_at DESC LIMIT ? OFFSET ?
-  `).all(pubkey, limit, offset);
+  return db.prepare(`SELECT s.*, c.ip FROM subscriptions s JOIN connections c ON s.connection_id = c.id WHERE c.pubkey = ? ORDER BY s.logged_at DESC LIMIT ? OFFSET ?`).all(pubkey, limit, offset);
 }
 
 function getPubkeyIps(pubkey) {
-  return db.prepare(`
-    SELECT ip, COUNT(DISTINCT id) as connections, MIN(connected_at) as first_seen, MAX(connected_at) as last_seen
-    FROM connections
-    WHERE pubkey = ?
-    GROUP BY ip ORDER BY last_seen DESC
-  `).all(pubkey);
+  return db.prepare(`SELECT ip, COUNT(DISTINCT id) as connections, MIN(connected_at) as first_seen, MAX(connected_at) as last_seen FROM connections WHERE pubkey = ? GROUP BY ip ORDER BY last_seen DESC`).all(pubkey);
 }
 
-function getGeoStats() {
-  const cached = db.prepare('SELECT COUNT(*) as c FROM ip_geo WHERE lat IS NOT NULL').get().c;
-  const total = db.prepare('SELECT COUNT(DISTINCT ip) as c FROM connections').get().c;
-  return { cached, total, uncached: Math.max(0, total - cached) };
-}
-
-function getAllUniqueIps() {
-  return db.prepare('SELECT DISTINCT ip FROM connections').all().map(r => r.ip);
-}
-
-function getUniqueIpsForPubkey(pubkey) {
-  const rows = db.prepare(`
-    SELECT DISTINCT ip FROM (
-      SELECT ip FROM connections WHERE pubkey = ?
-      UNION
-      SELECT ip FROM published_events WHERE pubkey = ?
-    )
-  `).all(pubkey, pubkey);
-  return rows.map(r => r.ip);
+function getAllPubkeys() {
+  return db.prepare('SELECT DISTINCT pubkey FROM published_events WHERE pubkey IS NOT NULL').all().map(r => r.pubkey);
 }
 
 module.exports = {
-  init,
-  logConnection,
-  logDisconnection,
-  updateConnectionPubkey,
-  logPublishedEvent,
-  logSubscription,
-  logSubscriptionClose,
-  getStats,
-  getConnections,
-  getEvents,
-  getSubscriptions,
-  getTopIps,
-  getActivity,
-  getPubkeys,
-  getReaderStats,
-  getPubkeyDetail,
-  getPubkeyEvents,
-  getPubkeySubscriptions,
-  getPubkeyIps,
+  init, logConnection, logDisconnection, updateConnectionPubkey,
+  logPublishedEvent, logSubscription, logSubscriptionClose,
+  getStats, getConnections, getEvents, getSubscriptions, getTopIps, getActivity,
+  getPubkeys, getReaderStats, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps,
   // Geo
-  geocodeIps,
-  getGeoForIp,
-  getGeoForIps,
-  getAllGeo,
-  getGeoForPubkey,
-  getGeoStats,
-  getAllUniqueIps,
-  getUniqueIpsForPubkey,
+  geocodeIps, getGeoForIp, getAllGeo, getGeoForPubkey, getGeoStats, getAllUniqueIps, getUniqueIpsForPubkey,
+  // Profiles
+  cacheProfile, getProfile, getProfiles, getStaleProfiles, fetchProfilesFromRelay,
+  getAllPubkeys,
 };

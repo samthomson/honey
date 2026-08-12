@@ -209,8 +209,13 @@ wss.on('connection', (clientWs, req) => {
             kind: event.kind,
             created_at: event.created_at,
             tags: JSON.stringify(event.tags || []),
+            content: event.content || '',
             content_len: event.content ? event.content.length : 0,
           });
+          // Queue kind:0 profile for caching
+          if (event.kind === 0 && event.pubkey) {
+            try { db.cacheProfile(event.pubkey, JSON.parse(event.content)); } catch {}
+          }
         } else if (msg[0] === 'AUTH' && msg[1]) {
           const event = msg[1];
           db.logPublishedEvent(connId, ip, {
@@ -219,6 +224,7 @@ wss.on('connection', (clientWs, req) => {
             kind: event.kind,
             created_at: event.created_at,
             tags: JSON.stringify(event.tags || []),
+            content: event.content || '',
             content_len: event.content ? event.content.length : 0,
           });
         } else if (msg[0] === 'REQ' && msg.length >= 3) {
@@ -267,10 +273,46 @@ wss.on('connection', (clientWs, req) => {
   });
 });
 
+// --- Background workers ---
+
+// Geocode all uncached IPs on startup, then every 10 minutes
+async function geoWorker() {
+  async function run() {
+    try {
+      const ips = db.getAllUniqueIps();
+      if (ips.length) await db.geocodeIps(ips);
+    } catch (err) { console.error('[geo] Worker error:', err.message); }
+  }
+  // Initial run after 5s
+  setTimeout(run, 5000);
+  // Then every 10 min
+  setInterval(run, 10 * 60 * 1000);
+}
+
+// Fetch missing profiles from the backend relay every 5 minutes
+async function profileWorker() {
+  async function run() {
+    try {
+      const pubkeys = db.getAllPubkeys();
+      const stale = db.getStaleProfiles(pubkeys);
+      if (stale.length > 0) {
+        console.log(`[profiles] Fetching ${stale.length} missing profiles...`);
+        await db.fetchProfilesFromRelay(stale.slice(0, 100), BACKEND_WS_URL);
+      }
+    } catch (err) { console.error('[profiles] Worker error:', err.message); }
+  }
+  // Initial run after 10s
+  setTimeout(run, 10000);
+  // Then every 5 min
+  setInterval(run, 5 * 60 * 1000);
+}
+
 // --- Start ---
 server.listen(PORT, () => {
   console.log(`🍯 Honey listening on :${PORT}`);
   console.log(`   Backend WS:   ${BACKEND_WS_URL}`);
   console.log(`   Backend HTTP: ${BACKEND_HTTP_URL}`);
   console.log(`   Dashboard:    http://localhost:${PORT}/`);
+  geoWorker();
+  profileWorker();
 });
