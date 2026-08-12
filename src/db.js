@@ -237,7 +237,7 @@ function getUncachedIps(ips) {
 
 function cacheGeo(entry) {
   db.prepare(`
-    INSERT OR REPLACE INTO ip_geo (ip, country, country_code, region, city, lat, lon, isp, org, as, proxy, hosting, geocoded_at)
+    INSERT OR REPLACE INTO ip_geo (ip, country, country_code, region, city, lat, lon, isp, org, "as", proxy, hosting, geocoded_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.ip, entry.country, entry.countryCode, entry.region, entry.city,
