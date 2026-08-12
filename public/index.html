@@ -137,7 +137,9 @@ let map = null;
 let mapMarkers = [];
 let userEventPage = 0;
 let geoPollTimer = null;
+let refreshInProgress = false;
 const USER_EVENTS_PER_PAGE = 20;
+const API_TIMEOUT = 10000; // 10s
 
 // --- Token ---
 function getToken() {
@@ -156,8 +158,9 @@ function setToken(t) { localStorage.setItem('honey_token', t); }
 function authHeaders() { const t = getToken(); return t ? { Authorization: 'Bearer ' + t } : {}; }
 
 async function api(path) {
-  const res = await fetch(API_BASE + path, { headers: authHeaders() });
+  const res = await fetch(API_BASE + path, { headers: authHeaders(), signal: AbortSignal.timeout(API_TIMEOUT) });
   if (res.status === 401) { document.getElementById('token-input').style.display = 'block'; throw new Error('Unauthorized'); }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
 }
 
@@ -435,9 +438,17 @@ async function loadTable() {
 
 // --- Refresh ---
 async function refresh() {
-  if (currentTab === 'map') { await loadMap(); }
-  else { await Promise.allSettled([loadStats(), loadChart(), loadTable()]); }
-  document.getElementById('refresh-info').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  if (refreshInProgress) return;
+  refreshInProgress = true;
+  try {
+    if (currentTab === 'map') { await loadMap(); }
+    else { await Promise.allSettled([loadStats(), loadChart(), loadTable()]); }
+    document.getElementById('refresh-info').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('refresh-info').textContent = '⚠️ ' + (e.message || 'Error');
+  } finally {
+    refreshInProgress = false;
+  }
 }
 
 // --- Tab handlers ---
