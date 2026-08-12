@@ -250,7 +250,7 @@ function cacheGeo(entry) {
 let geocodingInProgress = false;
 
 async function geocodeIps(ips) {
-  if (geocodingInProgress) return;
+  if (geocodingInProgress) { console.log('[geo] Already running, skip'); return; }
   const uncached = getUncachedIps(ips);
   if (!uncached.length) return;
 
@@ -258,53 +258,64 @@ async function geocodeIps(ips) {
   console.log(`[geo] Geocoding ${uncached.length} IPs...`);
 
   try {
-    // ip-api.com batch: HTTP, up to 100 per request, free, reliable
-    for (let i = 0; i < uncached.length; i += 100) {
-      const batch = uncached.slice(i, i + 100);
+    // Provider 1: ipwho.is — HTTPS, free, no key, reliable from containers
+    let remaining = [...uncached];
+    let cached = 0;
+
+    for (const ip of remaining.slice()) {
       try {
-        const res = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(batch.map(ip => ({ query: ip }))),
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const results = await res.json();
-        let cached = 0;
-        for (const r of results) {
-          if (r.status === 'success') {
-            cacheGeo({
-              ip: r.query, country: r.country, countryCode: r.countryCode,
-              region: r.region, city: r.city, lat: r.lat, lon: r.lon,
-              isp: r.isp, org: r.org, as: r.as, proxy: r.proxy, hosting: r.hosting,
-            });
-            cached++;
-          }
+        const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, { signal: AbortSignal.timeout(8000) });
+        const j = await r.json();
+        if (j.success !== false && j.latitude) {
+          cacheGeo({
+            ip, country: j.country, countryCode: j.country_code,
+            region: j.region, city: j.city, lat: j.latitude, lon: j.longitude,
+            isp: j.connection?.isp, org: j.connection?.org,
+            as: j.connection?.asn ? `AS${j.connection.asn}` : null,
+            proxy: !!(j.security?.proxy || j.security?.tor),
+            hosting: !!(j.type === 'ipv4' && j.connection?.org && /host|server|datacenter|cloud|vps|aws|google|azure|digitalocean/i.test(j.connection?.org || '')),
+          });
+          cached++;
+          remaining = remaining.filter(x => x !== ip);
         }
-        console.log(`[geo] Batch ${Math.floor(i/100)+1}: ${cached}/${batch.length} cached`);
-      } catch (err) {
-        console.error(`[geo] Batch failed: ${err.message}`);
-        // Fallback: ipwho.is (HTTPS, individual)
-        for (const ip of batch) {
-          try {
-            const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, { signal: AbortSignal.timeout(8000) });
-            const j = await r.json();
-            if (j.success !== false && j.latitude) {
-              cacheGeo({
-                ip, country: j.country, countryCode: j.country_code,
-                region: j.region, city: j.city, lat: j.latitude, lon: j.longitude,
-                isp: j.connection?.isp, org: j.connection?.org,
-                as: j.connection?.asn ? `AS${j.connection.asn}` : null,
-                proxy: !!(j.security?.proxy || j.security?.tor), hosting: false,
-              });
+      } catch (e) {
+        console.error(`[geo] ipwho.is failed for ${ip}: ${e.message}`);
+      }
+    }
+    console.log(`[geo] ipwho.is: ${cached}/${uncached.length} cached`);
+
+    // Provider 2: ip-api.com batch (HTTP fallback for any remaining)
+    if (remaining.length > 0) {
+      console.log(`[geo] Trying ip-api.com for ${remaining.length} remaining...`);
+      for (let i = 0; i < remaining.length; i += 100) {
+        const batch = remaining.slice(i, i + 100);
+        try {
+          const res = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(batch.map(ip => ({ query: ip }))),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const results = await res.json();
+          let bc = 0;
+          for (const r of results) {
+            if (r.status === 'success') {
+              cacheGeo({ ip: r.query, country: r.country, countryCode: r.countryCode, region: r.region, city: r.city, lat: r.lat, lon: r.lon, isp: r.isp, org: r.org, as: r.as, proxy: r.proxy, hosting: r.hosting });
+              bc++;
             }
-          } catch (e) {
-            console.error(`[geo] ipwho.is failed for ${ip}: ${e.message}`);
           }
+          console.log(`[geo] ip-api.com batch: ${bc}/${batch.length}`);
+        } catch (err) {
+          console.error(`[geo] ip-api.com failed: ${err.message}`);
         }
       }
     }
-    console.log(`[geo] Done. ${getUncachedIps(uncached).length === 0 ? 'All' : 'Partial'} cached.`);
+
+    const finalUncached = getUncachedIps(uncached);
+    console.log(`[geo] Done. ${uncached.length - finalUncached.length}/${uncached.length} cached.`);
+  } catch (err) {
+    console.error(`[geo] Fatal error: ${err.message}`);
   } finally {
     geocodingInProgress = false;
   }
