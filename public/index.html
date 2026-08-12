@@ -71,7 +71,7 @@
   .modal h3{font-size:.9rem;margin-bottom:10px}
   .modal-close{float:right;cursor:pointer;color:var(--muted);font-size:1.2rem;background:none;border:none}
   .modal-close:hover{color:var(--text)}
-  .modal pre{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-size:.75rem;overflow-x:auto;margin-top:8px}
+  .modal pre{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-size:.75rem;overflow-x:auto;overflow-wrap:break-word;word-break:break-word;white-space:pre-wrap;margin-top:8px;max-width:100%}
   .modal .ev-meta{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:12px;font-size:.78rem;padding-bottom:10px;border-bottom:1px solid var(--border)}
   .modal .ev-meta .k{color:var(--muted);display:block;font-size:.68rem;margin-bottom:2px}
   .modal .ev-meta .v{font-family:monospace;display:block;word-break:break-all}
@@ -121,9 +121,9 @@ const API='/api';
 let currentTab='connections',selectedPubkey=null,userFilter='publishers';
 let chart=null,map=null,mapMarkers=[];
 let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
-const PER_PAGE=20,API_TIMEOUT=8000;
+const PER_PAGE=20,API_TIMEOUT=15000;
 
-function getToken(){const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);u.delete('token');history.replaceState({},'',location.pathname+(u.toString()?'?'+u:''));return t}return localStorage.getItem('honey_token')||''}
+function getToken(){try{const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);const clean=location.pathname+location.hash;history.replaceState({},'',clean);return t}}catch(e){}return localStorage.getItem('honey_token')||''}
 function setToken(t){localStorage.setItem('honey_token',t)}
 function ah(){const t=getToken();return t?{Authorization:'Bearer '+t}:{}}
 
@@ -144,39 +144,22 @@ function spin(msg){return'<div class="loading">'+esc(msg||'Loading...')+'</div>'
 
 // NIP-19 npub encoding (bech32)
 const BECH32='qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-function bech32Polymod(values){let GEN=[0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];let chk=1;for(let v of values){let b=chk>>25;chk=(chk&0x1ffffff)<<5^v;for(let i=0;i<5;i++)if((b>>i)&1)chk^=GEN[i]}return chk}
-function bech32HrpExpand(hrp){return[...hrp].reduce((a,c)=>{a.pushc=c.charCodeAt(0)>>5;return a},[]).concat(0,[...hrp].reduce((a,c)=>{a.pushc.charCodeAt(0)&31;return a},[]))}
+const BECH32_GEN=[0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];
+function bech32Polymod(values){let chk=1;for(let v of values){let b=chk>>25;chk=(chk&0x1ffffff)<<5^v;for(let i=0;i<5;i++)if((b>>i)&1)chk^=BECH32_GEN[i]}return chk}
 function convertBits(data,fromBits,toBits,pad){let acc=0,bits=0;let ret=[];let maxv=(1<<toBits)-1;for(let v of data){if(v<0||v>>fromBits)throw new Error('invalid');acc=(acc<<fromBits)|v;bits+=fromBits;while(bits>=toBits){bits-=toBits;ret.push((acc>>bits)&maxv)}}if(pad)ret.push((acc<<(toBits-bits))&maxv);else if(bits>=fromBits||((acc<<(toBits-bits))&maxv))throw new Error('invalid padding');return ret}
-function npubEncode(hexPubkey){
-  try{
-    let hrp='npub';
-    let data=convertBits([...Buffer.from(hexPubkey,'hex')],8,5,true);
-    // Use Buffer for checksum
-    let values=[...bech32HrpExpand(hrp),...data];
-    let polymod=bech32Polymod(values)^1;
-    let checksum=[];
-    for(let i=0;i<6;i++)checksum.push((polymod>>5*(5-i))&31);
-    return hrp+'1'+[...data,...checksum].map(x=>BECH32[x]).join('')
-  }catch{return hexPubkey.slice(0,16)}
-}
-
-// We can't use Buffer in browser. Replace with manual hex→bytes:
 function hexToBytes(hex){const bytes=[];for(let i=0;i<hex.length;i+=2)bytes.push(parseInt(hex.substr(i,2),16));return bytes}
 function npub(hex){
   try{
     const hrp='npub';
     const data=convertBits(hexToBytes(hex),8,5,true);
-    // bech32 checksum
-    const hrpExp=[...hrp].reduce((a,c)=>{a.pushc.charCodeAt(0)>>5;return a},[]);
+    // bech32 HRP expand: high bits, separator, low bits
+    const hrpExp=[];
+    for(const c of hrp)hrpExp.push(c.charCodeAt(0)>>5);
     hrpExp.push(0);
     for(const c of hrp)hrpExp.push(c.charCodeAt(0)&31);
-    const values=[...hrpExp,...data];
-    // polymod
-    const GEN=[0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];
-    let chk=1;
-    for(const v of values){const b=chk>>25;chk=((chk&0x1ffffff)<<5)^v;for(let i=0;i<5;i++)if((b>>i)&1)chk^=GEN[i]}
-    chk^=1;
-    const cs=[];for(let i=0;i<6;i++)cs.push((chk>>5*(5-i))&31);
+    const values=[...hrpExp,...data,0,0,0,0,0,0];
+    const polymod=bech32Polymod(values)^1;
+    const cs=[];for(let i=0;i<6;i++)cs.push((polymod>>5*(5-i))&31);
     return hrp+'1'+[...data,...cs].map(x=>BECH32[x]).join('')
   }catch{return tr(hex,16)}
 }
@@ -277,7 +260,7 @@ async function loadMap(){
   destroyMap();
   const h=window.innerWidth<768?'350px':'500px';
   const title=selectedPubkey?`Map: <span class="mono" style="color:var(--accent2);font-size:.78rem">${esc(tr(selectedPubkey,20))}</span>`:'🌍 Global Connection Map';
-  area.innerHTML=breadcrumb()+`${selectedPubkey?'<div class="back-link" onclick="selectedPubkey=null;navigate(\'map\')">← Back to global map</div>':''}
+  area.innerHTML=breadcrumb()+`${selectedPubkey?'<div style="display:flex;gap:12px"><div class="back-link" onclick="navigate(\'users\',\''+esc(selectedPubkey)+'\')">← Back to user</div><div class="back-link" onclick="selectedPubkey=null;navigate(\'map\')">← Back to global map</div></div>':''}
     <div class="detail-card"><h2>${title}</h2>
     <div id="geo-status" style="margin-bottom:8px;font-size:.78rem;color:var(--muted)">${spin('Loading geo data...')}</div>
     <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;

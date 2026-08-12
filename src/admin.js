@@ -44,6 +44,12 @@ function createAdminRouter() {
       const profiles = db.getProfiles(pubkeys);
       const map = Object.fromEntries(profiles.map(p => [p.pubkey, p]));
       for (const r of rows) { if (r.pubkey && map[r.pubkey]) r.profile = map[r.pubkey]; }
+      // Background-fetch missing profiles (fire-and-forget)
+      const stale = db.getStaleProfiles(pubkeys);
+      if (stale.length > 0) {
+        const relayUrl = req.app.get('backendWsUrl') || 'wss://relay.example.com';
+        db.fetchProfilesFromRelay(stale, relayUrl).catch(() => {});
+      }
     }
     res.json(rows);
   });
@@ -51,6 +57,16 @@ function createAdminRouter() {
   router.get('/pubkeys/:pubkey', (req, res) => {
     const detail = db.getPubkeyDetail(req.params.pubkey);
     if (!detail) return res.status(404).json({ error: 'Not found' });
+    // Background-fetch profile if missing
+    if (!detail.profile) {
+      const relayUrl = req.app.get('backendWsUrl') || 'wss://relay.example.com';
+      db.fetchProfilesFromRelay([req.params.pubkey], relayUrl).then(() => {
+        const updated = db.getPubkeyDetail(req.params.pubkey);
+        if (updated && updated.profile) {
+          // Next request will have it
+        }
+      }).catch(() => {});
+    }
     res.json(detail);
   });
 
@@ -87,7 +103,15 @@ function createAdminRouter() {
   // ─── Geo (all read-only, returns cached data instantly) ───
   router.get('/geo/all', (req, res) => res.json(db.getAllGeo()));
   router.get('/geo/pubkey/:pubkey', (req, res) => res.json(db.getGeoForPubkey(req.params.pubkey)));
-  router.get('/geo/status', (req, res) => res.json(db.getGeoStats()));
+  router.get('/geo/status', (req, res) => {
+    const stats = db.getGeoStats();
+    // Trigger background geocoding if uncached IPs exist
+    if (stats.uncached > 0) {
+      const allIps = db.getAllUniqueIps();
+      db.geocodeIps(allIps).catch(() => {});
+    }
+    res.json(stats);
+  });
 
   return router;
 }

@@ -384,7 +384,12 @@ function getConnections(limit, offset) {
 }
 
 function getEvents(limit, offset) {
-  return db.prepare('SELECT * FROM published_events ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(limit, offset);
+  return db.prepare(`
+    SELECT pe.*, g.country, g.country_code, g.city, g.lat, g.lon
+    FROM published_events pe
+    LEFT JOIN ip_geo g ON pe.ip = g.ip
+    ORDER BY pe.logged_at DESC LIMIT ? OFFSET ?
+  `).all(limit, offset);
 }
 
 function getSubscriptions(limit, offset) {
@@ -463,7 +468,12 @@ function getPubkeyDetail(pubkey) {
 }
 
 function getPubkeyEvents(pubkey, limit, offset) {
-  return db.prepare('SELECT * FROM published_events WHERE pubkey = ? ORDER BY logged_at DESC LIMIT ? OFFSET ?').all(pubkey, limit, offset);
+  return db.prepare(`
+    SELECT pe.*, g.country, g.country_code, g.city, g.lat, g.lon
+    FROM published_events pe
+    LEFT JOIN ip_geo g ON pe.ip = g.ip
+    WHERE pe.pubkey = ? ORDER BY pe.logged_at DESC LIMIT ? OFFSET ?
+  `).all(pubkey, limit, offset);
 }
 
 function getPubkeySubscriptions(pubkey, limit, offset) {

@@ -308,6 +308,10 @@ async function profileWorker() {
 }
 
 // --- Start ---
+app.set('backendWsUrl', BACKEND_WS_URL);
+app.set('backend host', BACKEND_HOST);
+app.set('backend scheme', BACKEND_SCHEME);
+
 server.listen(PORT, () => {
   console.log(`🍯 Honey listening on :${PORT}`);
   console.log(`   Backend WS:   ${BACKEND_WS_URL}`);
