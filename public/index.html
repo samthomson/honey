@@ -7,122 +7,35 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
-    --bg: #0d1117;
-    --card: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #f0c040;
-    --accent2: #58a6ff;
-    --danger: #f85149;
+    --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3;
+    --muted: #8b949e; --accent: #f0c040; --accent2: #58a6ff; --danger: #f85149;
     --radius: 8px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    padding: 12px;
-    max-width: 1200px;
-    margin: 0 auto;
-    -webkit-text-size-adjust: 100%;
+    background: var(--bg); color: var(--text); padding: 12px;
+    max-width: 1200px; margin: 0 auto; -webkit-text-size-adjust: 100%;
   }
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  h1 { font-size: 1.4rem; }
-  h1 span { color: var(--accent); }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  h1 { font-size: 1.4rem; } h1 span { color: var(--accent); }
   .header-right { display: flex; align-items: center; gap: 8px; }
-  #token-input {
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px 10px;
-    border-radius: var(--radius);
-    font-size: 0.8rem;
-    width: 140px;
-    display: none;
-  }
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-  .stat-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 8px;
-    text-align: center;
-  }
+  #token-input { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: var(--radius); font-size: 0.8rem; width: 140px; display: none; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin-bottom: 16px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 8px; text-align: center; }
   .stat-card .value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
   .stat-card .label { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
-  .chart-container {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px;
-    margin-bottom: 16px;
-    height: 220px;
-    position: relative;
-  }
+  .chart-container { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 16px; height: 220px; position: relative; }
   .chart-container h2 { font-size: 0.82rem; margin-bottom: 6px; color: var(--muted); }
   canvas { max-height: 170px !important; }
-
-  /* Tabs — scrollable horizontally on mobile */
-  .tabs {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 10px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-    padding-bottom: 2px;
-  }
-  .tabs::-webkit-scrollbar { height: 4px; }
-  .tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .tab {
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 7px 12px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 0.8rem;
-    transition: all 0.15s;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; scrollbar-color: var(--border) transparent; padding-bottom: 2px; }
+  .tabs::-webkit-scrollbar { height: 4px; } .tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .tab { background: var(--card); border: 1px solid var(--border); color: var(--muted); padding: 7px 12px; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
   .tab:hover { border-color: var(--accent2); color: var(--text); }
   .tab.active { background: var(--accent); color: #000; border-color: var(--accent); }
-
-  .table-wrap {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-  th {
-    text-align: left;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-    color: var(--muted);
-    font-weight: 600;
-    white-space: nowrap;
-    position: sticky;
-    top: 0;
-    background: var(--card);
-    z-index: 1;
-  }
+  th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 600; white-space: nowrap; position: sticky; top: 0; background: var(--card); z-index: 1; }
   td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   tr:hover { background: rgba(255,255,255,0.03); }
   .ip { font-family: monospace; color: var(--accent2); }
@@ -130,6 +43,7 @@
   .pubkey-link { font-family: monospace; color: var(--accent2); cursor: pointer; text-decoration: underline; }
   .pubkey-link:hover { color: var(--accent); }
   .kind-badge { display: inline-block; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+  .kind-0 { background: #8b949e22; color: #8b949e; }
   .kind-1 { background: #1f6feb22; color: #58a6ff; }
   .kind-3 { background: #2ea04322; color: #2ea043; }
   .kind-4 { background: #f8514922; color: #f85149; }
@@ -142,49 +56,42 @@
   #refresh-info { font-size: 0.7rem; color: var(--muted); }
   .filters-cell { font-family: monospace; font-size: 0.7rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
   .duration { color: var(--muted); font-size: 0.72rem; }
-  a { color: var(--accent2); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  a { color: var(--accent2); text-decoration: none; } a:hover { text-decoration: underline; }
 
-  .detail-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px;
-    margin-bottom: 12px;
-  }
+  /* Loading spinner */
+  .loading { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 0.85rem; }
+  .loading::after { content: ''; display: block; width: 24px; height: 24px; margin: 10px auto; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Pagination */
+  .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin: 10px 0; }
+  .pagination button { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 5px 12px; border-radius: var(--radius); cursor: pointer; font-size: 0.78rem; }
+  .pagination button:hover:not(:disabled) { border-color: var(--accent2); }
+  .pagination button:disabled { opacity: 0.4; cursor: default; }
+
+  .detail-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
   .detail-card h2 { font-size: 0.9rem; margin-bottom: 10px; }
   .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-  .detail-item { font-size: 0.78rem; }
-  .detail-item .key { color: var(--muted); }
-  .detail-item .val { color: var(--text); font-family: monospace; }
+  .detail-item { font-size: 0.78rem; } .detail-item .key { color: var(--muted); } .detail-item .val { color: var(--text); font-family: monospace; }
   .back-link { cursor: pointer; color: var(--accent2); margin-bottom: 8px; display: inline-block; font-size: 0.8rem; }
   .kind-list { display: flex; gap: 6px; flex-wrap: wrap; }
   .ip-list { display: flex; flex-direction: column; gap: 3px; font-family: monospace; font-size: 0.75rem; }
-  .map-popup { font-size: 0.78rem; line-height: 1.4; }
-  .map-popup strong { color: var(--accent); }
+  .map-popup { font-size: 0.78rem; line-height: 1.4; } .map-popup strong { color: var(--accent); }
   .map-popup .mp-ip { font-family: monospace; color: var(--accent2); }
   .map-popup .mp-detail { color: var(--muted); font-size: 0.7rem; margin-top: 3px; }
+  .panel-title { font-size: 0.82rem; margin: 12px 0 6px; color: var(--muted); }
 
-  /* Side-by-side panels stack on mobile */
   .dual-panel { display: grid; grid-template-columns: 1fr; gap: 8px; }
   @media (min-width: 768px) {
     .dual-panel { grid-template-columns: 1fr 1fr; }
     body { padding: 20px; }
     .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-    .stat-card { padding: 16px; }
-    .stat-card .value { font-size: 1.8rem; }
-    .stat-card .label { font-size: 0.75rem; }
-    .chart-container { height: 280px; padding: 16px; }
-    canvas { max-height: 220px !important; }
-    h1 { font-size: 1.6rem; }
-    table { font-size: 0.82rem; }
-    th { padding: 10px 14px; }
-    td { padding: 8px 14px; }
-    .detail-card { padding: 20px; }
-    #token-input { width: 180px; }
+    .stat-card { padding: 16px; } .stat-card .value { font-size: 1.8rem; } .stat-card .label { font-size: 0.75rem; }
+    .chart-container { height: 280px; padding: 16px; } canvas { max-height: 220px !important; }
+    h1 { font-size: 1.6rem; } table { font-size: 0.82rem; }
+    th { padding: 10px 14px; } td { padding: 8px 14px; }
+    .detail-card { padding: 20px; } #token-input { width: 180px; }
   }
-
-  /* Leaflet popup dark theme */
   .leaflet-popup-content-wrapper { background: var(--card); color: var(--text); border: 1px solid var(--border); }
   .leaflet-popup-tip { background: var(--card); border: 1px solid var(--border); }
   .leaflet-container { background: #0d1117; }
@@ -216,9 +123,7 @@
   <div class="tab" data-tab="ips">Top IPs</div>
 </div>
 
-<div id="content-area">
-  <div class="table-wrap" id="table-wrap"></div>
-</div>
+<div id="content-area"><div class="loading">Loading...</div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -226,18 +131,20 @@
 const API_BASE = '/api';
 let currentTab = 'connections';
 let selectedPubkey = null;
-let userFilter = 'publishers'; // 'publishers' | 'readers'
+let userFilter = 'publishers';
 let chart = null;
 let map = null;
 let mapMarkers = [];
+let userEventPage = 0;
+let geoPollTimer = null;
+const USER_EVENTS_PER_PAGE = 20;
 
-// --- Token: URL param ?token=xxx > localStorage > input ---
+// --- Token ---
 function getToken() {
   const urlParams = new URLSearchParams(window.location.search);
   const urlToken = urlParams.get('token');
   if (urlToken) {
     localStorage.setItem('honey_token', urlToken);
-    // Clean URL (remove token param so it's not accidentally shared)
     urlParams.delete('token');
     const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
     window.history.replaceState({}, '', newUrl);
@@ -246,36 +153,24 @@ function getToken() {
   return localStorage.getItem('honey_token') || '';
 }
 function setToken(t) { localStorage.setItem('honey_token', t); }
+function authHeaders() { const t = getToken(); return t ? { Authorization: 'Bearer ' + t } : {}; }
 
 async function api(path) {
-  const token = getToken();
-  const headers = {};
-  if (token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(API_BASE + path, { headers });
-  if (res.status === 401) {
-    document.getElementById('token-input').style.display = 'block';
-    throw new Error('Unauthorized');
-  }
+  const res = await fetch(API_BASE + path, { headers: authHeaders() });
+  if (res.status === 401) { document.getElementById('token-input').style.display = 'block'; throw new Error('Unauthorized'); }
   return res.json();
 }
 
-function fmtTime(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts * 1000);
-  return d.toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-function fmtDuration(connAt, discAt) {
-  if (!discAt) return '<span class="badge-active">active</span>';
-  const secs = discAt - connAt;
-  if (secs < 60) return secs + 's';
-  if (secs < 3600) return Math.floor(secs / 60) + 'm';
-  return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
-}
-function kindClass(kind) { return 'kind-' + (kind || '0'); }
+// --- Utils ---
+function fmtTime(ts) { if (!ts) return '—'; return new Date(ts * 1000).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+function fmtDuration(connAt, discAt) { if (!discAt) return '<span class="badge-active">active</span>'; const s = discAt - connAt; if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s/60) + 'm'; return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm'; }
+function kindClass(k) { return 'kind-' + (k || '0'); }
 function truncate(s, n) { return !s ? '—' : (s.length > n ? s.slice(0, n) + '…' : s); }
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function showLoading(msg) { return '<div class="loading">' + esc(msg || 'Loading...') + '</div>'; }
 
+// --- Stats + Chart ---
 async function loadStats() {
   try {
     const [s, rs] = await Promise.all([api('/stats'), api('/reader-stats')]);
@@ -285,11 +180,9 @@ async function loadStats() {
       <div class="stat-card"><div class="value" style="color:#f0c040">${rs.totalPublishers.toLocaleString()}</div><div class="label">Publishers</div></div>
       <div class="stat-card"><div class="value" style="color:#8b949e">${rs.totalReaders.toLocaleString()}</div><div class="label">Anon Readers</div></div>
       <div class="stat-card"><div class="value">${s.totalEvents.toLocaleString()}</div><div class="label">Events</div></div>
-      <div class="stat-card"><div class="value" style="color:#2ea043">${s.activeConnections.toLocaleString()}</div><div class="label">Active</div></div>
-    `;
-  } catch (e) {}
+      <div class="stat-card"><div class="value" style="color:#2ea043">${s.activeConnections.toLocaleString()}</div><div class="label">Active</div></div>`;
+  } catch {}
 }
-
 async function loadChart() {
   try {
     const data = await api('/activity');
@@ -300,209 +193,261 @@ async function loadChart() {
     if (chart) chart.destroy();
     chart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: labels.map(l => l.slice(5, 16)),
-        datasets: [
-          { label: 'Connections', data: labels.map(l => connMap[l] || 0), borderColor: '#f0c040', backgroundColor: '#f0c04022', fill: true, tension: 0.3 },
-          { label: 'Events', data: labels.map(l => eventMap[l] || 0), borderColor: '#58a6ff', backgroundColor: '#58a6ff22', fill: true, tension: 0.3 },
-        ]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
+      data: { labels: labels.map(l => l.slice(5, 16)), datasets: [
+        { label: 'Connections', data: labels.map(l => connMap[l] || 0), borderColor: '#f0c040', backgroundColor: '#f0c04022', fill: true, tension: 0.3 },
+        { label: 'Events', data: labels.map(l => eventMap[l] || 0), borderColor: '#58a6ff', backgroundColor: '#58a6ff22', fill: true, tension: 0.3 },
+      ]},
+      options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { labels: { color: '#8b949e', font: { size: 10 } } } },
-        scales: {
-          x: { ticks: { color: '#8b949e', maxTicksLimit: 8, font: { size: 9 } }, grid: { color: '#21262d' } },
-          y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } }
-        }
-      }
-    });
-  } catch (e) {}
+        scales: { x: { ticks: { color: '#8b949e', maxTicksLimit: 8, font: { size: 9 } }, grid: { color: '#21262d' } },
+                   y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 9 } }, grid: { color: '#21262d' } } }
+      });
+  } catch {}
 }
 
-function showPubkeyDetail(pubkey) {
-  selectedPubkey = pubkey;
-  currentTab = 'users';
-  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-  document.querySelector('.tab[data-tab="users"]').classList.add('active');
-  loadTable();
-}
-function backToList() { selectedPubkey = null; loadTable(); }
-function setUserFilter(f) { userFilter = f; selectedPubkey = null; loadTable(); }
-function showUserMap(pubkey) {
-  selectedPubkey = pubkey;
-  currentTab = 'map';
-  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-  document.querySelector('.tab[data-tab="map"]').classList.add('active');
-  loadTable();
-}
+// --- Navigation ---
+function showPubkeyDetail(pubkey) { selectedPubkey = pubkey; userEventPage = 0; currentTab = 'users'; document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); document.querySelector('.tab[data-tab="users"]').classList.add('active'); loadTable(); }
+function backToList() { selectedPubkey = null; userEventPage = 0; loadTable(); }
+function setUserFilter(f) { userFilter = f; selectedPubkey = null; userEventPage = 0; loadTable(); }
+function showUserMap(pubkey) { selectedPubkey = pubkey; currentTab = 'map'; document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); document.querySelector('.tab[data-tab="map"]').classList.add('active'); loadTable(); }
 
 // --- Map ---
-function destroyMap() { if (map) { map.remove(); map = null; mapMarkers = []; } }
-function initMap() {
-  if (map) return;
-  map = L.map('map-container', { worldCopyJump: true, zoomControl: true }).setView([20, 0], 2);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OSM &copy; CARTO', maxZoom: 18,
-  }).addTo(map);
+function destroyMap() { if (map) { map.remove(); map = null; mapMarkers = []; } if (geoPollTimer) { clearTimeout(geoPollTimer); geoPollTimer = null; } }
+function initMap() { if (map) return; map = L.map('map-container', { worldCopyJump: true }).setView([20, 0], 2); L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OSM &copy; CARTO', maxZoom: 18 }).addTo(map); }
+
+function renderMapMarkers(geoData) {
+  if (!map) return;
+  mapMarkers.forEach(m => map.removeLayer(m));
+  mapMarkers = [];
+  if (!geoData || geoData.length === 0) return;
+  const bounds = [];
+  for (const g of geoData) {
+    if (!g.lat || !g.lon) continue;
+    bounds.push([g.lat, g.lon]);
+    const popup = `<div class="map-popup"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><span class="mp-ip">${esc(g.ip)}</span><br>Connections: <strong>${g.connections||0}</strong> · Events: <strong>${g.events||0}</strong>${g.pubkeys?`<br>Pubkeys: <strong>${g.pubkeys}</strong>`:''}<div class="mp-detail">${esc(g.isp)}${g.proxy?' · 🛡 Proxy':''}${g.hosting?' · 🖥 Hosting':''}</div></div>`;
+    const r = Math.min(4 + (g.connections||1) * 2, 16);
+    const c = g.proxy ? '#f85149' : (g.hosting ? '#8b949e' : '#f0c040');
+    const m = L.circleMarker([g.lat, g.lon], { radius: r, fillColor: c, color: c, weight: 1, opacity: 0.8, fillOpacity: 0.5 }).addTo(map);
+    m.bindPopup(popup);
+    mapMarkers.push(m);
+  }
+  if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 6 });
 }
 
 async function loadMap() {
   const area = document.getElementById('content-area');
   destroyMap();
-  const mapHeight = window.innerWidth < 768 ? '350px' : '500px';
+  const h = window.innerWidth < 768 ? '350px' : '500px';
+  const title = selectedPubkey ? `Map: <span style="font-family:monospace;color:var(--accent2);font-size:0.78rem">${esc(truncate(selectedPubkey,20))}</span>` : '🌍 Global Connection Map';
 
-  if (selectedPubkey) {
-    area.innerHTML = `
-      <div class="back-link" onclick="selectedPubkey=null; loadMap();">← Back to global map</div>
-      <div class="detail-card">
-        <h2>Map: <span style="font-family:monospace;color:var(--accent2);font-size:0.78rem">${esc(truncate(selectedPubkey, 20))}</span></h2>
-        <div id="map-container" style="height:${mapHeight};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
-      </div>`;
-  } else {
-    area.innerHTML = `
-      <div class="detail-card">
-        <h2>🌍 Global Connection Map</h2>
-        <div id="map-container" style="height:${mapHeight};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div>
-      </div>`;
-  }
+  area.innerHTML = `${selectedPubkey ? '<div class="back-link" onclick="selectedPubkey=null; loadMap();">← Back to global map</div>' : ''}
+    <div class="detail-card"><h2>${title}</h2><div id="geo-status" style="margin-bottom:8px;font-size:0.78rem;color:var(--muted)">${showLoading('Loading...')}</div>
+    <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;
 
   await sleep(100);
   initMap();
 
   try {
-    let geoData;
-    if (selectedPubkey) {
-      geoData = await api('/geo/pubkey/' + encodeURIComponent(selectedPubkey));
-    } else {
-      geoData = await api('/geo/all');
-    }
+    // Load cached geo + status in parallel
+    const [status, geoData] = await Promise.all([
+      api('/geo/status'),
+      selectedPubkey ? api('/geo/pubkey/' + encodeURIComponent(selectedPubkey)) : api('/geo/all')
+    ]);
+    updateGeoStatus(status);
+    renderMapMarkers(geoData);
 
-    if (!geoData || geoData.length === 0) {
-      area.innerHTML += '<div class="empty" style="padding:20px">No geolocation data yet.</div>';
-      return;
+    if (geoData.length === 0 && status.total === 0) {
+      document.getElementById('geo-status').innerHTML = '<span style="color:var(--muted)">No connections logged yet.</span>';
+    } else if (status.uncached > 0) {
+      // Trigger background geocoding
+      triggerGeocoding();
     }
-
-    const bounds = [];
-    for (const g of geoData) {
-      if (!g.lat || !g.lon) continue;
-      bounds.push([g.lat, g.lon]);
-      const popupHtml = `
-        <div class="map-popup">
-          <strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br>
-          <span class="mp-ip">${esc(g.ip)}</span><br>
-          Connections: <strong>${g.connections || 0}</strong> · Events: <strong>${g.events || 0}</strong>${g.pubkeys ? `<br>Pubkeys: <strong>${g.pubkeys}</strong>` : ''}
-          <div class="mp-detail">${esc(g.isp)}${g.proxy ? ' · 🛡 Proxy' : ''}${g.hosting ? ' · 🖥 Hosting' : ''}</div>
-        </div>`;
-      const radius = Math.min(4 + (g.connections || 1) * 2, 16);
-      const color = g.proxy ? '#f85149' : (g.hosting ? '#8b949e' : '#f0c040');
-      const marker = L.circleMarker([g.lat, g.lon], {
-        radius, fillColor: color, color, weight: 1, opacity: 0.8, fillOpacity: 0.5,
-      }).addTo(map);
-      marker.bindPopup(popupHtml);
-      mapMarkers.push(marker);
-    }
-    if (bounds.length > 0) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 6 });
-  } catch (e) { console.error('Map error:', e); }
+  } catch (e) {
+    document.getElementById('geo-status').innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
+  }
 }
 
+function updateGeoStatus(status) {
+  const el = document.getElementById('geo-status');
+  if (!el) return;
+  if (status.total === 0) { el.innerHTML = '<span style="color:var(--muted)">No connections yet.</span>'; return; }
+  const pct = Math.round(status.cached / status.total * 100);
+  if (status.uncached > 0) {
+    el.innerHTML = `📍 ${status.cached}/${status.total} IPs geocoded (${pct}%) · <span style="color:var(--accent)">Geocoding ${status.uncached} more...</span>`;
+  } else {
+    el.innerHTML = `📍 ${status.cached}/${status.total} IPs geocoded ✅`;
+  }
+}
+
+async function triggerGeocoding() {
+  try {
+    const url = selectedPubkey ? '/geo/geocode?pubkey=' + encodeURIComponent(selectedPubkey) : '/geo/geocode';
+    await fetch(API_BASE + url, { method: 'POST', headers: authHeaders() });
+  } catch {}
+  geoPollTimer = setTimeout(pollGeoStatus, 5000);
+}
+
+async function pollGeoStatus() {
+  try {
+    const status = await api('/geo/status');
+    updateGeoStatus(status);
+    if (status.uncached > 0) {
+      geoPollTimer = setTimeout(pollGeoStatus, 5000);
+    } else {
+      // Reload markers with newly geocoded data
+      const geoData = selectedPubkey
+        ? await api('/geo/pubkey/' + encodeURIComponent(selectedPubkey))
+        : await api('/geo/all');
+      renderMapMarkers(geoData);
+    }
+  } catch {}
+}
+
+// --- User Detail ---
+async function loadUserDetail() {
+  const area = document.getElementById('content-area');
+  area.innerHTML = showLoading('Loading user details...');
+
+  try {
+    const d = await api('/pubkeys/' + encodeURIComponent(selectedPubkey));
+    area.innerHTML = `
+      <div class="back-link" onclick="backToList()">← Back to Users</div>
+      <div class="detail-card">
+        <h2>User <span style="font-family:monospace;color:var(--accent2);font-size:0.78rem">${esc(truncate(selectedPubkey,24))}</span></h2>
+        <div class="detail-grid">
+          <div class="detail-item"><span class="key">First:</span> <span class="val">${fmtTime(d.first_seen)}</span></div>
+          <div class="detail-item"><span class="key">Last:</span> <span class="val">${fmtTime(d.last_seen)}</span></div>
+          <div class="detail-item"><span class="key">Events:</span> <span class="val">${d.event_count}</span></div>
+          <div class="detail-item"><span class="key">Subs:</span> <span class="val">${d.subscriptions}</span></div>
+          <div class="detail-item"><span class="key">Conns:</span> <span class="val">${d.connections}</span></div>
+          <div class="detail-item"><span class="key">IPs:</span> <span class="val">${d.ips_used}</span></div>
+        </div>
+        <div style="margin-top:10px"><span class="key" style="font-size:0.8rem">Kinds:</span>
+          <div class="kind-list" style="margin-top:4px">${d.kinds.map(k => '<span class="kind-badge ' + kindClass(k.kind) + '">' + k.kind + ': ' + k.count + '</span>').join('')}</div></div>
+        <div style="margin-top:10px"><span class="key" style="font-size:0.8rem">IPs:</span>
+          <div class="ip-list" style="margin-top:4px">${d.ips.map(ip => '<span>' + esc(ip) + '</span>').join('')}</div></div>
+        <div style="margin-top:12px">
+          <button onclick="showUserMap('${esc(selectedPubkey)}')" style="background:var(--card);border:1px solid var(--accent2);color:var(--accent2);padding:7px 14px;border-radius:var(--radius);cursor:pointer;font-size:0.8rem">🌍 View IP Map</button>
+        </div>
+      </div>
+      <div class="dual-panel">
+        <div><h3 class="panel-title">Recent Events</h3><div id="user-events-panel"></div></div>
+        <div><h3 class="panel-title">Subscriptions</h3><div id="user-subs-panel"></div></div>
+      </div>`;
+
+    loadUserEvents();
+    loadUserSubs();
+  } catch (e) {
+    area.innerHTML = '<div class="empty">Error loading user: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadUserEvents() {
+  const panel = document.getElementById('user-events-panel');
+  if (!panel) return;
+  panel.innerHTML = showLoading('Loading events...');
+
+  try {
+    const offset = userEventPage * USER_EVENTS_PER_PAGE;
+    const events = await api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/events?limit=' + USER_EVENTS_PER_PAGE + '&offset=' + offset);
+
+    let html = '<div class="table-wrap"><table><thead><tr><th>Kind</th><th>Event ID</th><th>IP</th><th>Tags</th><th>Len</th><th>Created</th><th>Logged</th></tr></thead><tbody>';
+    html += events.length ? events.map(r => {
+      let tagCount = 0; try { tagCount = JSON.parse(r.tags).length; } catch {}
+      return '<tr><td><span class="kind-badge ' + kindClass(r.kind) + '">' + r.kind + '</span></td>'
+        + '<td class="pubkey" title="' + esc(r.event_id) + '">' + esc(truncate(r.event_id, 12)) + '</td>'
+        + '<td class="ip">' + esc(r.ip) + '</td>'
+        + '<td style="text-align:center">' + tagCount + '</td>'
+        + '<td>' + (r.content_len||0) + '</td>'
+        + '<td class="duration">' + fmtTime(r.created_at) + '</td>'
+        + '<td class="duration">' + fmtTime(r.logged_at) + '</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="empty">No events</td></tr>';
+    html += '</tbody></table></div>';
+
+    html += '<div class="pagination"><button onclick="prevUserEvents()" ' + (userEventPage === 0 ? 'disabled' : '') + '>← Prev</button>'
+      + '<span style="color:var(--muted);font-size:0.78rem;padding:5px 0">Page ' + (userEventPage + 1) + '</span>'
+      + '<button onclick="nextUserEvents()" ' + (events.length < USER_EVENTS_PER_PAGE ? 'disabled' : '') + '>Next →</button></div>';
+
+    panel.innerHTML = html;
+  } catch (e) { panel.innerHTML = '<div class="empty">Error loading events</div>'; }
+}
+function prevUserEvents() { if (userEventPage > 0) { userEventPage--; loadUserEvents(); } }
+function nextUserEvents() { userEventPage++; loadUserEvents(); }
+
+async function loadUserSubs() {
+  const panel = document.getElementById('user-subs-panel');
+  if (!panel) return;
+  panel.innerHTML = showLoading('Loading subs...');
+
+  try {
+    const subs = await api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/subscriptions?limit=50');
+    let html = '<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>IP</th><th>Filters</th><th>Time</th></tr></thead><tbody>';
+    html += subs.length ? subs.map(r => '<tr><td class="pubkey">' + esc(truncate(r.subscription_id,16)) + '</td><td class="ip">' + esc(r.ip) + '</td><td class="filters-cell" title="' + esc(r.filters) + '">' + esc(truncate(r.filters,50)) + '</td><td>' + fmtTime(r.logged_at) + '</td></tr>').join('') : '<tr><td colspan="4" class="empty">No subs</td></tr>';
+    html += '</tbody></table></div>';
+    panel.innerHTML = html;
+  } catch { panel.innerHTML = '<div class="empty">Error loading subs</div>'; }
+}
+
+// --- Table loading ---
 async function loadTable() {
   const area = document.getElementById('content-area');
 
   if (currentTab === 'map') { await loadMap(); return; }
+  if (currentTab === 'users' && selectedPubkey) { await loadUserDetail(); return; }
 
-  if (currentTab === 'users' && selectedPubkey) {
-    try {
-      const d = await api('/pubkeys/' + encodeURIComponent(selectedPubkey));
-      area.innerHTML = `
-        <div class="back-link" onclick="backToList()">← Back to Users</div>
-        <div class="detail-card">
-          <h2>User <span style="font-family:monospace;color:var(--accent2);font-size:0.78rem">${esc(truncate(selectedPubkey, 24))}</span></h2>
-          <div class="detail-grid">
-            <div class="detail-item"><span class="key">First:</span> <span class="val">${fmtTime(d.first_seen)}</span></div>
-            <div class="detail-item"><span class="key">Last:</span> <span class="val">${fmtTime(d.last_seen)}</span></div>
-            <div class="detail-item"><span class="key">Events:</span> <span class="val">${d.event_count}</span></div>
-            <div class="detail-item"><span class="key">Subs:</span> <span class="val">${d.subscriptions}</span></div>
-            <div class="detail-item"><span class="key">Conns:</span> <span class="val">${d.connections}</span></div>
-            <div class="detail-item"><span class="key">IPs:</span> <span class="val">${d.ips_used}</span></div>
-          </div>
-          <div style="margin-top:10px"><span class="key" style="font-size:0.8rem">Kinds:</span>
-            <div class="kind-list" style="margin-top:4px">${d.kinds.map(k => `<span class="kind-badge ${kindClass(k.kind)}">${k.kind}: ${k.count}</span>`).join('')}</div></div>
-          <div style="margin-top:10px"><span class="key" style="font-size:0.8rem">IPs:</span>
-            <div class="ip-list" style="margin-top:4px">${d.ips.map(ip => `<span>${esc(ip)}</span>`).join('')}</div></div>
-          <div style="margin-top:12px">
-            <button onclick="showUserMap('${esc(selectedPubkey)}')" style="background:var(--card);border:1px solid var(--accent2);color:var(--accent2);padding:7px 14px;border-radius:var(--radius);cursor:pointer;font-size:0.8rem">🌍 View IP Map</button>
-          </div>
-        </div>`;
-
-      const [events, subs] = await Promise.all([
-        api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/events?limit=50'),
-        api('/pubkeys/' + encodeURIComponent(selectedPubkey) + '/subscriptions?limit=50'),
-      ]);
-
-      let html = '<div class="dual-panel">';
-      html += `<div class="table-wrap"><table><thead><tr><th>Kind</th><th>IP</th><th>Len</th><th>Time</th></tr></thead><tbody>`;
-      html += events.length ? events.map(r => `<tr><td><span class="kind-badge ${kindClass(r.kind)}">${r.kind}</span></td><td class="ip">${esc(r.ip)}</td><td>${r.content_len||0}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">No events</td></tr>';
-      html += `</tbody></table></div>`;
-      html += `<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>IP</th><th>Filters</th><th>Time</th></tr></thead><tbody>`;
-      html += subs.length ? subs.map(r => `<tr><td class="pubkey">${esc(truncate(r.subscription_id,16))}</td><td class="ip">${esc(r.ip)}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(truncate(r.filters,50))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">No subs</td></tr>';
-      html += `</tbody></table></div></div>`;
-      area.innerHTML += html;
-    } catch (e) { area.innerHTML = '<div class="empty">Error loading detail</div>'; }
-    return;
-  }
+  // Show loading immediately
+  area.innerHTML = showLoading('Loading ' + currentTab + '...');
 
   try {
     if (currentTab === 'connections') {
       const rows = await api('/connections?limit=100');
-      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>ID</th><th>IP</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>${rows.length ? rows.map(r => `<tr><td>#${r.id}</td><td class="ip">${esc(r.ip)}</td><td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,12))}</span>` : '<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:0.72rem">${esc(truncate(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDuration(r.connected_at,r.disconnected_at)}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">No connections</td></tr>'}</tbody></table></div>`;
+      area.innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>IP</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>' + (rows.length ? rows.map(r => '<tr><td>#' + r.id + '</td><td class="ip">' + esc(r.ip) + '</td><td>' + (r.pubkey ? '<span class="pubkey-link" onclick="showPubkeyDetail(\'' + esc(r.pubkey) + '\')" title="' + esc(r.pubkey) + '">' + esc(truncate(r.pubkey,12)) + '</span>' : '<span style="color:var(--muted)">—</span>') + '</td><td style="color:var(--muted);font-size:0.72rem">' + esc(truncate(r.user_agent,30)) + '</td><td>' + fmtTime(r.connected_at) + '</td><td class="duration">' + fmtDuration(r.connected_at,r.disconnected_at) + '</td></tr>').join('') : '<tr><td colspan="6" class="empty">No connections</td></tr>') + '</tbody></table></div>';
     } else if (currentTab === 'events') {
       const rows = await api('/events?limit=100');
-      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Kind</th><th>Event ID</th><th>T</th><th>Len</th><th>Time</th></tr></thead><tbody>${rows.length ? rows.map(r => `<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,12))}</span>` : '<span style="color:var(--muted)">—</span>'}</td><td><span class="kind-badge ${kindClass(r.kind)}">${r.kind}</span></td><td class="pubkey" title="${esc(r.event_id)}">${esc(truncate(r.event_id,12))}</td><td>${(()=>{try{return JSON.parse(r.tags).length}catch{return 0}})()}</td><td>${r.content_len||0}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">No events</td></tr>'}</tbody></table></div>`;
+      area.innerHTML = '<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Kind</th><th>Event ID</th><th>T</th><th>Len</th><th>Time</th></tr></thead><tbody>' + (rows.length ? rows.map(r => '<tr><td class="ip">' + esc(r.ip) + '</td><td>' + (r.pubkey ? '<span class="pubkey-link" onclick="showPubkeyDetail(\'' + esc(r.pubkey) + '\')" title="' + esc(r.pubkey) + '">' + esc(truncate(r.pubkey,12)) + '</span>' : '<span style="color:var(--muted)">—</span>') + '</td><td><span class="kind-badge ' + kindClass(r.kind) + '">' + r.kind + '</span></td><td class="pubkey" title="' + esc(r.event_id) + '">' + esc(truncate(r.event_id,12)) + '</td><td>' + (()=>{try{return JSON.parse(r.tags).length}catch{return 0}})() + '</td><td>' + (r.content_len||0) + '</td><td>' + fmtTime(r.logged_at) + '</td></tr>').join('') : '<tr><td colspan="7" class="empty">No events</td></tr>') + '</tbody></table></div>';
     } else if (currentTab === 'subscriptions') {
       const rows = await api('/subscriptions?limit=100');
-      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>${rows.length ? rows.map(r => `<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey ? `<span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,12))}</span>` : '<span style="color:var(--muted)">—</span>'}</td><td class="pubkey">${esc(truncate(r.subscription_id,16))}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(truncate(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No subs</td></tr>'}</tbody></table></div>`;
+      area.innerHTML = '<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>' + (rows.length ? rows.map(r => '<tr><td class="ip">' + esc(r.ip) + '</td><td>' + (r.pubkey ? '<span class="pubkey-link" onclick="showPubkeyDetail(\'' + esc(r.pubkey) + '\')" title="' + esc(r.pubkey) + '">' + esc(truncate(r.pubkey,12)) + '</span>' : '<span style="color:var(--muted)">—</span>') + '</td><td class="pubkey">' + esc(truncate(r.subscription_id,16)) + '</td><td class="filters-cell" title="' + esc(r.filters) + '">' + esc(truncate(r.filters,60)) + '</td><td>' + fmtTime(r.logged_at) + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">No subs</td></tr>') + '</tbody></table></div>';
     } else if (currentTab === 'users') {
       const filterParam = userFilter === 'readers' ? '&filter=readers' : '';
       const rows = await api('/pubkeys?limit=100' + filterParam);
-      let tableHtml;
+      let html;
       if (userFilter === 'readers') {
-        tableHtml = `<div class="user-filter" style="margin-bottom:10px;display:flex;gap:6px">
-          <span class="tab" style="cursor:pointer" onclick="setUserFilter('publishers')">✍️ Publishers</span>
-          <span class="tab active" style="cursor:pointer">👁 Anonymous Readers</span>
-        </div>`;
-        tableHtml += `<div class="table-wrap"><table><thead><tr><th>IP</th><th>Subs</th><th>Conns</th><th>First Seen</th><th>Last Seen</th></tr></thead><tbody>`;
-        tableHtml += rows.length ? rows.map(r => `<tr><td class="ip">${esc(r.ip)}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${fmtTime(r.first_seen)}</td><td>${fmtTime(r.last_seen)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No anonymous readers</td></tr>';
-        tableHtml += `</tbody></table></div>`;
+        html = '<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'publishers\')">✍️ Publishers</span><span class="tab active" style="cursor:pointer">👁 Anonymous Readers</span></div>';
+        html += '<div class="table-wrap"><table><thead><tr><th>IP</th><th>Subs</th><th>Conns</th><th>First Seen</th><th>Last Seen</th></tr></thead><tbody>';
+        html += rows.length ? rows.map(r => '<tr><td class="ip">' + esc(r.ip) + '</td><td>' + (r.sub_count||0) + '</td><td>' + (r.connections||0) + '</td><td>' + fmtTime(r.first_seen) + '</td><td>' + fmtTime(r.last_seen) + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">No anonymous readers</td></tr>';
+        html += '</tbody></table></div>';
       } else {
-        tableHtml = `<div class="user-filter" style="margin-bottom:10px;display:flex;gap:6px">
-          <span class="tab active" style="cursor:pointer">✍️ Publishers</span>
-          <span class="tab" style="cursor:pointer" onclick="setUserFilter('readers')">👁 Anonymous Readers</span>
-        </div>`;
-        tableHtml += `<div class="table-wrap"><table><thead><tr><th>Pubkey</th><th>Ev</th><th>Sub</th><th>Conn</th><th>IPs</th><th>Last Seen</th><th></th></tr></thead><tbody>`;
-        tableHtml += rows.length ? rows.map(r => `<tr><td><span class="pubkey-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(truncate(r.pubkey,16))}</span></td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`).join('') : '<tr><td colspan="7" class="empty">No publishers yet</td></tr>';
-        tableHtml += `</tbody></table></div>`;
+        html = '<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab active" style="cursor:pointer">✍️ Publishers</span><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'readers\')">👁 Anonymous Readers</span></div>';
+        html += '<div class="table-wrap"><table><thead><tr><th>Pubkey</th><th>Ev</th><th>Sub</th><th>Conn</th><th>IPs</th><th>Last Seen</th><th></th></tr></thead><tbody>';
+        html += rows.length ? rows.map(r => '<tr><td><span class="pubkey-link" onclick="showPubkeyDetail(\'' + esc(r.pubkey) + '\')" title="' + esc(r.pubkey) + '">' + esc(truncate(r.pubkey,16)) + '</span></td><td>' + (r.event_count||0) + '</td><td>' + (r.sub_count||0) + '</td><td>' + (r.connections||0) + '</td><td>' + (r.event_ips||0) + '</td><td>' + fmtTime(r.last_seen) + '</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap(\'' + esc(r.pubkey) + '\')" title="Map">🌍</span></td></tr>').join('') : '<tr><td colspan="7" class="empty">No publishers yet</td></tr>';
+        html += '</tbody></table></div>';
       }
-      area.innerHTML = tableHtml;
+      area.innerHTML = html;
     } else if (currentTab === 'ips') {
       const rows = await api('/top-ips?limit=50');
-      area.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>IP</th><th>Conn</th><th>Ev</th><th>Sub</th></tr></thead><tbody>${rows.length ? rows.map((r,i)=>`<tr><td>${i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No data</td></tr>'}</tbody></table></div>`;
+      area.innerHTML = '<div class="table-wrap"><table><thead><tr><th>#</th><th>IP</th><th>Conn</th><th>Ev</th><th>Sub</th></tr></thead><tbody>' + (rows.length ? rows.map((r,i) => '<tr><td>' + (i+1) + '</td><td class="ip">' + esc(r.ip) + '</td><td>' + r.connections + '</td><td>' + r.events + '</td><td>' + r.subscriptions + '</td></tr>').join('') : '<tr><td colspan="5" class="empty">No data</td></tr>') + '</tbody></table></div>';
     }
-  } catch (e) {}
+  } catch (e) {
+    area.innerHTML = '<div class="empty">Error: ' + esc(e.message) + '</div>';
+  }
 }
 
+// --- Refresh ---
 async function refresh() {
   if (currentTab === 'map') { await loadMap(); }
   else { await Promise.allSettled([loadStats(), loadChart(), loadTable()]); }
   document.getElementById('refresh-info').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 
+// --- Tab handlers ---
 document.querySelectorAll('.tab').forEach(t => {
   t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
     currentTab = t.dataset.tab;
-    selectedPubkey = null;
-    userFilter = 'publishers';
+    selectedPubkey = null; userFilter = 'publishers'; userEventPage = 0;
+    if (geoPollTimer) { clearTimeout(geoPollTimer); geoPollTimer = null; }
     loadTable();
   });
 });

@@ -147,45 +147,87 @@ function cacheGeo(entry) {
   );
 }
 
+let geocodingInProgress = false;
+
 async function geocodeIps(ips) {
+  if (geocodingInProgress) { console.log('[geo] Already in progress, skipping'); return; }
   const uncached = getUncachedIps(ips);
   if (uncached.length === 0) return;
 
-  console.log(`[geo] Geocoding ${uncached.length} IPs...`);
+  geocodingInProgress = true;
+  console.log(`[geo] Geocoding ${uncached.length} uncached IPs...`);
 
-  // Try batch first (max 100 per request, HTTP only on free tier)
-  for (let i = 0; i < uncached.length; i += 100) {
-    const batch = uncached.slice(i, i + 100);
-    const queries = batch.map(ip => ({
-      query: ip,
-      fields: 'status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting'
-    }));
-
-    try {
-      const res = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(queries),
-        signal: AbortSignal.timeout(10000),
-      });
-      const results = await res.json();
-      let cached = 0;
-      for (const r of results) {
-        if (r.status === 'success') {
-          cacheGeo({
-            ip: r.query, country: r.country, countryCode: r.countryCode,
-            region: r.region, city: r.city, lat: r.lat, lon: r.lon,
-            isp: r.isp, org: r.org, as: r.as,
-            proxy: r.proxy, hosting: r.hosting,
-          });
-          cached++;
+  try {
+    // Strategy 1: ip-api.com batch (HTTP, fast, up to 100 per request)
+    let batchWorked = false;
+    for (let i = 0; i < uncached.length; i += 100) {
+      const batch = uncached.slice(i, i + 100);
+      try {
+        const res = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,region,city,lat,lon,isp,org,as,proxy,hosting,query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(batch.map(ip => ({ query: ip }))),
+          signal: AbortSignal.timeout(10000),
+        });
+        const results = await res.json();
+        let cached = 0;
+        for (const r of results) {
+          if (r.status === 'success') {
+            cacheGeo({
+              ip: r.query, country: r.country, countryCode: r.countryCode,
+              region: r.region, city: r.city, lat: r.lat, lon: r.lon,
+              isp: r.isp, org: r.org, as: r.as,
+              proxy: r.proxy, hosting: r.hosting,
+            });
+            cached++;
+          }
         }
+        console.log(`[geo] ip-api.com batch: ${cached}/${batch.length} cached`);
+        batchWorked = true;
+      } catch (err) {
+        console.error(`[geo] ip-api.com batch failed: ${err.message}`);
       }
-      console.log(`[geo] Batch OK: ${cached}/${batch.length} cached`);
-    } catch (err) {
-      console.error(`[geo] Batch failed (${err.message}), trying individual...`);
-      // Fallback: individual lookups via HTTPS (ipapi.co)
-      for (const ip of batch) {
+    }
+    if (batchWorked) {
+      const remaining = getUncachedIps(uncached);
+      if (remaining.length === 0) { console.log('[geo] All cached via batch'); return; }
+    }
+
+    // Strategy 2: ipwho.is (HTTPS, free, no key, individual)
+    const remaining2 = getUncachedIps(uncached);
+    if (remaining2.length > 0) {
+      console.log(`[geo] Trying ipwho.is for ${remaining2.length} IPs...`);
+      let cached2 = 0;
+      for (const ip of remaining2) {
+        try {
+          const res = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          const r = await res.json();
+          if (r.success !== false && r.latitude) {
+            cacheGeo({
+              ip,
+              country: r.country, countryCode: r.country_code,
+              region: r.region, city: r.city,
+              lat: r.latitude, lon: r.longitude,
+              isp: r.connection?.isp || r.connection?.org,
+              org: r.connection?.org,
+              as: r.connection?.asn ? `AS${r.connection.asn}` : null,
+              proxy: !!(r.security?.proxy || r.security?.tor),
+              hosting: false,
+            });
+            cached2++;
+          }
+        } catch {}
+      }
+      console.log(`[geo] ipwho.is: ${cached2}/${remaining2.length} cached`);
+    }
+
+    // Strategy 3: ipapi.co (HTTPS, 1 req/sec rate limit, last resort)
+    const remaining3 = getUncachedIps(uncached);
+    if (remaining3.length > 0) {
+      console.log(`[geo] Trying ipapi.co for ${remaining3.length} IPs...`);
+      for (const ip of remaining3) {
         try {
           const res = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
             signal: AbortSignal.timeout(8000),
@@ -194,18 +236,23 @@ async function geocodeIps(ips) {
           if (r.latitude && r.longitude) {
             cacheGeo({
               ip, country: r.country_name, countryCode: r.country_code,
-              region: r.region, city: r.city, lat: r.latitude, lon: r.longitude,
+              region: r.region, city: r.city,
+              lat: r.latitude, lon: r.longitude,
               isp: r.org || r.asn, org: r.org, as: r.asn,
               proxy: false, hosting: false,
             });
           }
-          // Rate limit: 1 req/sec on free tier
-          await new Promise(r => setTimeout(r, 1100));
-        } catch (err2) {
-          console.error(`[geo] Individual lookup failed for ${ip}: ${err2.message}`);
+          await new Promise(resolve => setTimeout(resolve, 1100));
+        } catch (err) {
+          console.error(`[geo] ipapi.co failed for ${ip}: ${err.message}`);
         }
       }
     }
+
+    const finalUncached = getUncachedIps(uncached);
+    console.log(`[geo] Done. ${uncached.length - finalUncached.length}/${uncached.length} cached.`);
+  } finally {
+    geocodingInProgress = false;
   }
 }
 
@@ -436,6 +483,12 @@ function getPubkeyIps(pubkey) {
   `).all(pubkey);
 }
 
+function getGeoStats() {
+  const cached = db.prepare('SELECT COUNT(*) as c FROM ip_geo WHERE lat IS NOT NULL').get().c;
+  const total = db.prepare('SELECT COUNT(DISTINCT ip) as c FROM connections').get().c;
+  return { cached, total, uncached: Math.max(0, total - cached) };
+}
+
 function getAllUniqueIps() {
   return db.prepare('SELECT DISTINCT ip FROM connections').all().map(r => r.ip);
 }
@@ -477,6 +530,7 @@ module.exports = {
   getGeoForIps,
   getAllGeo,
   getGeoForPubkey,
+  getGeoStats,
   getAllUniqueIps,
   getUniqueIpsForPubkey,
 };

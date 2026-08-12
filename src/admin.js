@@ -72,23 +72,29 @@ function createAdminRouter() {
 
   // --- Geo endpoints ---
 
-  // Trigger geocoding for all uncached IPs, return all geo data
-  router.get('/geo/all', async (req, res) => {
-    try {
-      const allIps = db.getAllUniqueIps();
-      await db.geocodeIps(allIps);
-      res.json(db.getAllGeo());
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
+  // Return cached geo data immediately (no blocking geocoding)
+  router.get('/geo/all', (req, res) => {
+    res.json(db.getAllGeo());
   });
 
-  // Geo for a specific pubkey's IPs
-  router.get('/geo/pubkey/:pubkey', async (req, res) => {
+  // Cached geo for a specific pubkey
+  router.get('/geo/pubkey/:pubkey', (req, res) => {
+    res.json(db.getGeoForPubkey(req.params.pubkey));
+  });
+
+  // Geo cache stats
+  router.get('/geo/status', (req, res) => {
+    res.json(db.getGeoStats());
+  });
+
+  // Trigger background geocoding (non-blocking)
+  router.post('/geo/geocode', (req, res) => {
     try {
-      const ips = db.getUniqueIpsForPubkey(req.params.pubkey);
-      await db.geocodeIps(ips);
-      res.json(db.getGeoForPubkey(req.params.pubkey));
+      const ips = req.query.pubkey
+        ? db.getUniqueIpsForPubkey(req.query.pubkey)
+        : db.getAllUniqueIps();
+      db.geocodeIps(ips).catch(err => console.error('[geo] Background error:', err.message));
+      res.json({ status: 'started', count: ips.length });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
