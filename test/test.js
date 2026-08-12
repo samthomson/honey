@@ -52,13 +52,39 @@ fakeRelay.on('connection', (ws) => {
 
     if (msg[0] === 'REQ') {
       const subId = msg[1];
-      const event = {
-        kind: 1, content: 'test event from relay',
-        created_at: Math.floor(Date.now() / 1000), tags: [],
-        pubkey: 'relaypubkey', id: 'relayeventid', sig: 'relaysig',
-      };
-      ws.send(JSON.stringify(['EVENT', subId, event]));
-      ws.send(JSON.stringify(['EOSE', subId]));
+      const filters = msg.slice(2);
+
+      // Check if this is a profile request (kind:0)
+      const isProfileReq = filters.some(f => f.kinds && f.kinds.includes(0) && f.authors);
+
+      if (isProfileReq) {
+        // Send back kind:0 profile events for requested authors
+        for (const f of filters) {
+          if (f.authors) {
+            for (const pk of f.authors) {
+              const profileEvent = {
+                kind: 0,
+                pubkey: pk,
+                content: JSON.stringify({ name: 'user-' + pk.slice(0, 8), display_name: 'Test User', picture: null, about: 'test profile' }),
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [],
+                id: 'profile-' + pk,
+                sig: 'sig-' + pk,
+              };
+              ws.send(JSON.stringify(['EVENT', subId, profileEvent]));
+            }
+          }
+        }
+        ws.send(JSON.stringify(['EOSE', subId]));
+      } else {
+        const event = {
+          kind: 1, content: 'test event from relay',
+          created_at: Math.floor(Date.now() / 1000), tags: [],
+          pubkey: 'relaypubkey', id: 'relayeventid', sig: 'relaysig',
+        };
+        ws.send(JSON.stringify(['EVENT', subId, event]));
+        ws.send(JSON.stringify(['EOSE', subId]));
+      }
     }
 
     if (msg[0] === 'EVENT') {
@@ -271,6 +297,69 @@ async function run() {
   // 404 for unknown pubkey
   const unknownPkRes = await httpGet(`http://localhost:${HONEY_PORT}/api/pubkeys/nonexistent-pubkey`);
   assert(unknownPkRes.status === 404, 'API /pubkeys/:unknown returns 404');
+
+  // === TEST 17: Profile fetching from relay ===
+  console.log('Test 17: Profile fetching from relay');
+  // Profile may already be cached from background fetch triggered by /pubkeys in Test 16
+  // Check current state
+  const profileCheckRes = await httpGet(`http://localhost:${HONEY_PORT}/api/profiles/test-pubkey-abc`);
+  if (profileCheckRes.status === 404) {
+    // Not cached yet — use POST endpoint to fetch from relay explicitly
+    const { http: httpReq, request: httpRequest } = require('http');
+    const fetchResult = await new Promise((resolve, reject) => {
+      const r = httpRequest(`http://localhost:${HONEY_PORT}/api/profiles/test-pubkey-abc/fetch`, { method: 'POST' }, (res) => {
+        let body = '';
+        res.on('data', c => body += c);
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      r.on('error', reject);
+      r.end();
+    });
+    assert(fetchResult.status === 200, 'POST /profiles/:pubkey/fetch returns 200');
+    const fetchedProfile = JSON.parse(fetchResult.body);
+    assert(fetchedProfile && fetchedProfile.name === 'user-test-pub', 'Fetched profile has correct name from relay');
+    assert(fetchedProfile && fetchedProfile.display_name === 'Test User', 'Fetched profile has display_name from relay');
+  }
+
+  // Give background fetch a moment if it was racing
+  await sleep(500);
+
+  // Verify it's cached in DB
+  const cachedProfile = testDb.prepare('SELECT * FROM profiles WHERE pubkey = ?').get('test-pubkey-abc');
+  assert(cachedProfile != null, 'Profile cached in DB');
+  assert(cachedProfile.name === 'user-test-pub', 'Cached profile name correct');
+
+  // Now /api/profiles/:pubkey should return it
+  const profileGetRes = await httpGet(`http://localhost:${HONEY_PORT}/api/profiles/test-pubkey-abc`);
+  assert(profileGetRes.status === 200, 'GET /profiles/:pubkey returns 200 after caching');
+  assert(JSON.parse(profileGetRes.body).name === 'user-test-pub', 'GET /profiles/:pubkey returns correct profile');
+
+  // Now pubkey detail should include profile
+  const detailWithProfile = await httpGet(`http://localhost:${HONEY_PORT}/api/pubkeys/test-pubkey-abc`);
+  const detailBody = JSON.parse(detailWithProfile.body);
+  assert(detailBody.profile != null, 'Pubkey detail includes profile after fetch');
+  assert(detailBody.profile.name === 'user-test-pub', 'Pubkey detail profile name correct');
+
+  // === TEST 18: IPs dedup ===
+  console.log('Test 18: IP count dedup (events + connections UNION)');
+  // test-pubkey-abc connected from ::1 (connection) and published from ::1 (event) - same IP
+  assert(detailBody.ips_used === 1, 'ips_used should be 1 (same IP for events + connections)');
+  assert(detailBody.ips.length === 1, 'ips array length should be 1');
+
+  // === TEST 19: Geo stats scoped to pubkey ===
+  console.log('Test 19: Geo stats scoped to pubkey');
+  const geoStatsGlobal = await httpGet(`http://localhost:${HONEY_PORT}/api/geo/status`);
+  const geoStatsBody = JSON.parse(geoStatsGlobal.body);
+  assert(typeof geoStatsBody.total === 'number', 'Global geo stats has total');
+
+  const geoStatsPubkey = await httpGet(`http://localhost:${HONEY_PORT}/api/geo/status?pubkey=test-pubkey-abc`);
+  const geoPkBody = JSON.parse(geoStatsPubkey.body);
+  assert(geoPkBody.total === 1, 'Pubkey geo stats total should be 1 (one unique IP)');
+
+  // Unknown pubkey should have 0
+  const geoStatsUnknown = await httpGet(`http://localhost:${HONEY_PORT}/api/geo/status?pubkey=nonexistent`);
+  const geoUnkBody = JSON.parse(geoStatsUnknown.body);
+  assert(geoUnkBody.total === 0, 'Unknown pubkey geo stats total should be 0');
 
   // === DONE ===
   console.log('\n--- Results ---');

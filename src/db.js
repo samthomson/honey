@@ -353,6 +353,14 @@ function getGeoStats() {
   return { cached, total, uncached: Math.max(0, total - cached) };
 }
 
+function getGeoStatsForPubkey(pubkey) {
+  const ips = getUniqueIpsForPubkey(pubkey);
+  if (!ips.length) return { cached: 0, total: 0, uncached: 0 };
+  const placeholders = ips.map(() => '?').join(',');
+  const cached = db.prepare(`SELECT COUNT(*) as c FROM ip_geo WHERE lat IS NOT NULL AND ip IN (${placeholders})`).get(...ips).c;
+  return { cached, total: ips.length, uncached: Math.max(0, ips.length - cached) };
+}
+
 function getAllUniqueIps() {
   return db.prepare('SELECT DISTINCT ip FROM connections').all().map(r => r.ip);
 }
@@ -452,7 +460,7 @@ function getReaderStats() {
 
 function getPubkeyDetail(pubkey) {
   const summary = db.prepare(`
-    SELECT pubkey, COUNT(DISTINCT id) as event_count, COUNT(DISTINCT ip) as ips_used,
+    SELECT pubkey, COUNT(DISTINCT id) as event_count,
       MIN(logged_at) as first_seen, MAX(logged_at) as last_seen
     FROM published_events WHERE pubkey = ? GROUP BY pubkey
   `).get(pubkey);
@@ -464,7 +472,7 @@ function getPubkeyDetail(pubkey) {
   const kinds = db.prepare(`SELECT kind, COUNT(*) as count FROM published_events WHERE pubkey = ? GROUP BY kind ORDER BY count DESC`).all(pubkey);
   const profile = getProfile(pubkey);
 
-  return { ...summary, connections, subscriptions, ips, kinds, profile };
+  return { ...summary, ips_used: ips.length, connections, subscriptions, ips, kinds, profile };
 }
 
 function getPubkeyEvents(pubkey, limit, offset) {
@@ -494,7 +502,7 @@ module.exports = {
   getStats, getConnections, getEvents, getSubscriptions, getTopIps, getActivity,
   getPubkeys, getReaderStats, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps,
   // Geo
-  geocodeIps, getGeoForIp, getAllGeo, getGeoForPubkey, getGeoStats, getAllUniqueIps, getUniqueIpsForPubkey,
+  geocodeIps, getGeoForIp, getAllGeo, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey, getAllUniqueIps, getUniqueIpsForPubkey,
   // Profiles
   cacheProfile, getProfile, getProfiles, getStaleProfiles, fetchProfilesFromRelay,
   getAllPubkeys,

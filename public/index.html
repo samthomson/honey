@@ -266,7 +266,7 @@ async function loadMap(){
     <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;
   await sleep(100);initMap();
   try{
-    const[status,gd]=await Promise.all([api('/geo/status'),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey)):api('/geo/all')]);
+    const[status,gd]=await Promise.all([api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):'')),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey)):api('/geo/all')]);
     const el=document.getElementById('geo-status');
     if(!gd.length){
       el.innerHTML= status.total>0
@@ -283,7 +283,7 @@ async function loadMap(){
 
 async function pollGeo(){
   try{
-    const st=await api('/geo/status');
+    const st=await api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):''));
     const el=document.getElementById('geo-status');
     if(!el)return;
     if(st.uncached>0){

@@ -104,11 +104,12 @@ function createAdminRouter() {
   router.get('/geo/all', (req, res) => res.json(db.getAllGeo()));
   router.get('/geo/pubkey/:pubkey', (req, res) => res.json(db.getGeoForPubkey(req.params.pubkey)));
   router.get('/geo/status', (req, res) => {
-    const stats = db.getGeoStats();
+    const pubkey = req.query.pubkey;
+    const stats = pubkey ? db.getGeoStatsForPubkey(pubkey) : db.getGeoStats();
     // Trigger background geocoding if uncached IPs exist
     if (stats.uncached > 0) {
-      const allIps = db.getAllUniqueIps();
-      db.geocodeIps(allIps).catch(() => {});
+      const ips = pubkey ? db.getUniqueIpsForPubkey(pubkey) : db.getAllUniqueIps();
+      db.geocodeIps(ips).catch(() => {});
     }
     res.json(stats);
   });
