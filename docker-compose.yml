@@ -12,6 +12,8 @@ services:
     restart: unless-stopped
     depends_on:
       - elasticsearch
+    networks:
+      - honey-net
 
   honey-dev:
     build: .
@@ -30,9 +32,12 @@ services:
     restart: "no"
     depends_on:
       - elasticsearch
+    networks:
+      - honey-net
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    hostname: elasticsearch
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -45,6 +50,12 @@ services:
     ports:
       - "9200:9200"
     restart: unless-stopped
+    networks:
+      - honey-net
+
+networks:
+  honey-net:
+    driver: bridge
 
 volumes:
   honey-data:
