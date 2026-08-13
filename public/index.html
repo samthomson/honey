@@ -128,6 +128,7 @@ let chart=null,map=null,mapMarkers=[];
 let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
 let selectedIp=null;
 let sortKey=null,sortDir='desc';
+let userSearch='';
 const PER_PAGE=20,API_TIMEOUT=15000;
 
 function getToken(){try{const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);const clean=location.pathname+location.hash;history.replaceState({},'',clean);return t}}catch(e){}return localStorage.getItem('honey_token')||''}
@@ -240,6 +241,8 @@ function breadcrumb(){
 function showPubkeyDetail(pk){navigate('users',pk)}
 function backToList(){navigate('users')}
 function setUserFilter(f){userFilter=f;selectedPubkey=null;userEventPage=0;loadTable()}
+let searchTimer=null;
+function setUserSearch(v){userSearch=v;clearTimeout(searchTimer);searchTimer=setTimeout(loadTable,300)}
 function setSort(k){if(sortKey===k){sortDir=sortDir==='asc'?'desc':'asc'}else{sortKey=k;sortDir='desc'}loadTable()}
 function sortRows(rows){if(!sortKey)return rows;return rows.sort((a,b)=>{let va=a[sortKey],vb=b[sortKey];if(typeof va==='number'&&typeof vb==='number')return sortDir==='asc'?va-vb:vb-va;if(va==null)va='';if(vb==null)vb='';return sortDir==='asc'?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va))})}
 function sortHeader(label,key){const cls=sortKey===key?('sortable '+(sortDir==='asc'?'sort-asc':'sort-desc')):'sortable';return`<th class="${cls}" onclick="setSort('${key}')">${label}</th>`}
@@ -488,8 +491,9 @@ async function loadTable(){
           sortedR.length?sortedR.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${fmtTime(r.first_seen)}</td><td>${fmtTime(r.last_seen)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No readers</td></tr>'
         )+'</tbody></table></div>';
       }else{
-        html='<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab active">✍️ Publishers</span><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'readers\')">👁 Anonymous Readers</span></div>';
-        const sortedP=sortRows(rows.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r}));
+        html='<div style="margin-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tab active">✍️ Publishers</span><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'readers\')">👁 Anonymous Readers</span><input type="text" id="user-search" placeholder="Search npub/name..." value="'+esc(userSearch)+'" oninput="setUserSearch(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:var(--radius);font-size:.78rem;width:180px;margin-left:auto"></div>';
+        const filteredP=rows.filter(r=>{if(!userSearch)return true;const npubStr=r.pubkey?npub(r.pubkey):'';const name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r.pubkey.toLowerCase().includes(userSearch.toLowerCase())||npubStr.toLowerCase().includes(userSearch.toLowerCase())||name.toLowerCase().includes(userSearch.toLowerCase())});
+        const sortedP=sortRows(filteredP.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r}));
         html+='<div class="table-wrap"><table><thead><tr>'+sortHeader('Pubkey','pubkey')+sortHeader('Name','name')+sortHeader('Ev','event_count')+sortHeader('Sub','sub_count')+sortHeader('IPs','event_ips')+sortHeader('Last Seen','last_seen')+'<th></th></tr></thead><tbody>'+(
           sortedP.length?sortedP.map(r=>{
             return`<tr><td><span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,16))}</span></td><td>${esc(tr(r.name,16))}</td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`
