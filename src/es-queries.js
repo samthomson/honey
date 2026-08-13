@@ -106,7 +106,7 @@ async function getActivity() {
         query: { range: { connected_at: { gte: weekAgo } } },
         aggs: {
           hourly: {
-            date_histogram: { field: 'connected_at', fixed_interval: '1h', format: 'yyyy-MM-dd\'T\'HH:mm:ss', calendar_interval: '1h' },
+            date_histogram: { field: 'connected_at', calendar_interval: '1h', format: 'yyyy-MM-dd\'T\'HH:mm:ss' },
           },
         },
       },

@@ -111,6 +111,8 @@ function checkEs() {
 }
 
 const db = require('../src/db');
+const sync = require('../src/sync');
+sync.setDb(db);
 db.init(DATA_DIR);
 require('../src/index.js');
 
@@ -180,6 +182,10 @@ async function run() {
   assert(events[0]?.kind === 1, 'EVENT kind logged correctly');
   assert(events[0]?.content_len === 11, 'EVENT content_len correct');
 
+  // Sync to ES before any API reads
+  db.flushWriteQueue();
+  await sync.runSync();
+
   // === TEST 2b: Pubkey associated to connection ===
   console.log('Test 2b: Pubkey associated to connection');
   const connWithPubkey = testDb.prepare('SELECT pubkey FROM connections WHERE id = 1').get();
@@ -212,6 +218,8 @@ async function run() {
   db.flushWriteQueue();
   const closes = testDb.prepare('SELECT * FROM subscription_closes WHERE subscription_id = ?').all('sub1');
   assert(closes.length === 1, 'CLOSE logged in SQLite');
+  db.flushWriteQueue();
+  await sync.runSync();
 
   // === TEST 6: Disconnection logging ===
   console.log('Test 6: Disconnection logging');
@@ -221,6 +229,8 @@ async function run() {
   const conns = testDb.prepare('SELECT * FROM connections').all();
   assert(conns.length >= 1, 'Connection logged');
   assert(conns[0]?.disconnected_at !== null, 'Disconnection logged');
+  db.flushWriteQueue();
+  await sync.runSync();
 
   // === TEST 7: NIP-11 HTTP proxy ===
   console.log('Test 7: NIP-11 HTTP proxy');
@@ -288,6 +298,8 @@ async function run() {
 
   const authEvents = testDb.prepare('SELECT * FROM published_events WHERE kind = 22242').all();
   assert(authEvents.length >= 1, 'AUTH event (kind 22242) logged');
+  db.flushWriteQueue();
+  await sync.runSync();
   authClient.close();
   await sleep(200);
 
