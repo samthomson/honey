@@ -46,7 +46,10 @@ function createAdminRouter() {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const filter = req.query.filter || 'publishers';
-    const rows = await esQueries.getPubkeys(limit, offset, filter);
+    const search = req.query.q || '';
+    const sortKey = req.query.sort || '';
+    const sortDir = req.query.dir || 'desc';
+    const rows = await esQueries.getPubkeys(limit, offset, filter, search, sortKey, sortDir);
 
     // Attach cached profiles (always from SQLite — profiles are small/fast)
     const pubkeys = rows.filter(r => r.pubkey).map(r => r.pubkey);

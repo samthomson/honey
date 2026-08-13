@@ -482,7 +482,11 @@ async function loadTable(){
         rows.length?rows.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="mono">${esc(tr(r.subscription_id,16))}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No subs</td></tr>'
       )+'</tbody></table></div>';
     }else if(currentTab==='users'){
-      const rows=await api('/pubkeys?limit=100'+(userFilter==='readers'?'&filter=readers':''));
+      const params=new URLSearchParams({limit:'100'});
+      if(userFilter==='readers')params.set('filter','readers');
+      if(userSearch)params.set('q',userSearch);
+      if(sortKey){params.set('sort',sortKey);params.set('dir',sortDir)}
+      const rows=await api('/pubkeys?'+params.toString());
       let html;
       if(userFilter==='readers'){
         html='<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'publishers\')">✍️ Publishers</span><span class="tab active">👁 Anonymous Readers</span></div>';
@@ -492,8 +496,7 @@ async function loadTable(){
         )+'</tbody></table></div>';
       }else{
         html='<div style="margin-bottom:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tab active">✍️ Publishers</span><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'readers\')">👁 Anonymous Readers</span><input type="text" id="user-search" placeholder="Search npub/name..." value="'+esc(userSearch)+'" oninput="setUserSearch(this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:var(--radius);font-size:.78rem;width:180px;margin-left:auto"></div>';
-        const filteredP=rows.filter(r=>{if(!userSearch)return true;const npubStr=r.pubkey?npub(r.pubkey):'';const name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r.pubkey.toLowerCase().includes(userSearch.toLowerCase())||npubStr.toLowerCase().includes(userSearch.toLowerCase())||name.toLowerCase().includes(userSearch.toLowerCase())});
-        const sortedP=sortRows(filteredP.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r}));
+        const sortedP=(sortKey==='name'||sortKey==='pubkey'||sortKey==='sub_count'||sortKey==='connections')?sortRows(rows.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r})):rows.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r});
         html+='<div class="table-wrap"><table><thead><tr>'+sortHeader('Pubkey','pubkey')+sortHeader('Name','name')+sortHeader('Ev','event_count')+sortHeader('Sub','sub_count')+sortHeader('IPs','event_ips')+sortHeader('Last Seen','last_seen')+'<th></th></tr></thead><tbody>'+(
           sortedP.length?sortedP.map(r=>{
             return`<tr><td><span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,16))}</span></td><td>${esc(tr(r.name,16))}</td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`

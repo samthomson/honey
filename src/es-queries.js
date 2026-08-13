@@ -185,7 +185,7 @@ async function getSubscriptions(limit, offset) {
   return result.hits.hits.map(h => ({ ...h._source }));
 }
 
-async function getPubkeys(limit, offset, filter) {
+async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
   const es = getClient();
 
   if (filter === 'readers') {
@@ -258,13 +258,25 @@ async function getPubkeys(limit, offset, filter) {
   }
 
   // Publishers: aggregate by pubkey from events
+  const esOrder = {};
+  if (sortKey === 'event_count' || !sortKey) esOrder._count = sortDir || 'desc';
+  else if (sortKey === 'event_ips') esOrder.event_ips = sortDir || 'desc';
+  else if (sortKey === 'first_seen') esOrder.first_seen = sortDir || 'desc';
+  else if (sortKey === 'last_seen') esOrder.last_seen = sortDir || 'desc';
+  else esOrder._count = 'desc';
+
+  // Build query: filter by pubkey prefix if searching
+  const query = search
+    ? { bool: { must: [{ exists: { field: 'pubkey' } }, { wildcard: { pubkey: { value: `*${search}*` } } }] } }
+    : { exists: { field: 'pubkey' } };
+
   const result = await es.search({
     index: INDICES.events, size: 0,
     body: {
-      query: { exists: { field: 'pubkey' } },
+      query,
       aggs: {
         by_pubkey: {
-          terms: { field: 'pubkey', size: limit, order: { last_seen: 'desc' } },
+          terms: { field: 'pubkey', size: limit, order: esOrder },
           aggs: {
             event_count: { value_count: { field: 'pubkey' } },
             event_ips: { cardinality: { field: 'ip' } },
