@@ -40,17 +40,19 @@ services:
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
       - cluster.name=honey-es
+      - bootstrap.memory_lock=false
+      - xpack.ml.enabled=false
     volumes:
       - es-data:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 60
+      start_period: 60s
 
 volumes:
   honey-data:
