@@ -8,7 +8,7 @@
     "test": "node test/test.js"
   },
   "dependencies": {
-    "@elastic/elasticsearch": "^9.5.0",
+    "@elastic/elasticsearch": "^8.19.2",
     "express": "^4.21.0",
     "ws": "^8.18.0"
   },
