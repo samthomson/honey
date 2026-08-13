@@ -66,6 +66,11 @@
   .profile-bar .pn-sub{font-size:.72rem;color:var(--muted);font-family:monospace}
   .event-content{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:.75rem}
   .event-row{cursor:pointer}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--accent)}
+  th.sortable::after{content:" ⇅";font-size:.7rem;opacity:.5}
+  th.sort-asc::after{content:" ↑";opacity:1;color:var(--accent)}
+  th.sort-desc::after{content:" ↓";opacity:1;color:var(--accent)}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:9999;padding:12px}
   .modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);max-width:700px;width:100%;max-height:85vh;overflow:auto;padding:16px}
   .modal h3{font-size:.9rem;margin-bottom:10px}
@@ -122,6 +127,7 @@ let currentTab='connections',selectedPubkey=null,userFilter='publishers';
 let chart=null,map=null,mapMarkers=[];
 let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
 let selectedIp=null;
+let sortKey=null,sortDir='desc';
 const PER_PAGE=20,API_TIMEOUT=15000;
 
 function getToken(){try{const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);const clean=location.pathname+location.hash;history.replaceState({},'',clean);return t}}catch(e){}return localStorage.getItem('honey_token')||''}
@@ -234,6 +240,9 @@ function breadcrumb(){
 function showPubkeyDetail(pk){navigate('users',pk)}
 function backToList(){navigate('users')}
 function setUserFilter(f){userFilter=f;selectedPubkey=null;userEventPage=0;loadTable()}
+function setSort(k){if(sortKey===k){sortDir=sortDir==='asc'?'desc':'asc'}else{sortKey=k;sortDir='desc'}loadTable()}
+function sortRows(rows){if(!sortKey)return rows;return rows.sort((a,b)=>{let va=a[sortKey],vb=b[sortKey];if(typeof va==='number'&&typeof vb==='number')return sortDir==='asc'?va-vb:vb-va;if(va==null)va='';if(vb==null)vb='';return sortDir==='asc'?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va))})}
+function sortHeader(label,key){const cls=sortKey===key?('sortable '+(sortDir==='asc'?'sort-asc':'sort-desc')):'sortable';return`<th class="${cls}" onclick="setSort('${key}')">${label}</th>`}
 function showIpDetail(ip){selectedIp=ip;location.hash='ips/'+encodeURIComponent(ip)}
 function showUserMap(pk){navigate('map',pk)}
 
@@ -474,23 +483,25 @@ async function loadTable(){
       let html;
       if(userFilter==='readers'){
         html='<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'publishers\')">✍️ Publishers</span><span class="tab active">👁 Anonymous Readers</span></div>';
-        html+='<div class="table-wrap"><table><thead><tr><th>IP</th><th>Subs</th><th>Conns</th><th>First Seen</th><th>Last Seen</th></tr></thead><tbody>'+(
-          rows.length?rows.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${fmtTime(r.first_seen)}</td><td>${fmtTime(r.last_seen)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No readers</td></tr>'
+        const sortedR=sortRows(rows);
+        html+='<div class="table-wrap"><table><thead><tr>'+sortHeader('IP','ip')+sortHeader('Subs','sub_count')+sortHeader('Conns','connections')+sortHeader('First Seen','first_seen')+sortHeader('Last Seen','last_seen')+'</tr></thead><tbody>'+(
+          sortedR.length?sortedR.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.sub_count||0}</td><td>${r.connections||0}</td><td>${fmtTime(r.first_seen)}</td><td>${fmtTime(r.last_seen)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No readers</td></tr>'
         )+'</tbody></table></div>';
       }else{
         html='<div style="margin-bottom:10px;display:flex;gap:6px"><span class="tab active">✍️ Publishers</span><span class="tab" style="cursor:pointer" onclick="setUserFilter(\'readers\')">👁 Anonymous Readers</span></div>';
-        html+='<div class="table-wrap"><table><thead><tr><th>Pubkey</th><th>Name</th><th>Ev</th><th>Sub</th><th>IPs</th><th>Last Seen</th><th></th></tr></thead><tbody>'+(
-          rows.length?rows.map(r=>{
-            const name=r.profile?(r.profile.display_name||r.profile.name||''):'';
-            return`<tr><td><span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,16))}</span></td><td>${esc(tr(name,16))}</td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`
+        const sortedP=sortRows(rows.map(r=>{r.name=r.profile?(r.profile.display_name||r.profile.name||''):'';return r}));
+        html+='<div class="table-wrap"><table><thead><tr>'+sortHeader('Pubkey','pubkey')+sortHeader('Name','name')+sortHeader('Ev','event_count')+sortHeader('Sub','sub_count')+sortHeader('IPs','event_ips')+sortHeader('Last Seen','last_seen')+'<th></th></tr></thead><tbody>'+(
+          sortedP.length?sortedP.map(r=>{
+            return`<tr><td><span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,16))}</span></td><td>${esc(tr(r.name,16))}</td><td>${r.event_count||0}</td><td>${r.sub_count||0}</td><td>${r.event_ips||0}</td><td>${fmtTime(r.last_seen)}</td><td><span style="cursor:pointer;font-size:1rem" onclick="showUserMap('${esc(r.pubkey)}')" title="Map">🌍</span></td></tr>`
           }).join(''):'<tr><td colspan="7" class="empty">No publishers</td></tr>'
         )+'</tbody></table></div>';
       }
       area.innerHTML=html;
     }else if(currentTab==='ips'){
       const rows=await api('/top-ips?limit=50');
-      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>#</th><th>IP</th><th>Conn</th><th>Ev</th><th>Sub</th></tr></thead><tbody>'+(
-        rows.length?rows.map((r,i)=>`<tr><td>${i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No data</td></tr>'
+      const sortedI=sortRows(rows);
+      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>#</th>'+sortHeader('IP','ip')+sortHeader('Conn','connections')+sortHeader('Ev','events')+sortHeader('Sub','subscriptions')+'</tr></thead><tbody>'+(
+        sortedI.length?sortedI.map((r,i)=>`<tr><td>${i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No data</td></tr>'
       )+'</tbody></table></div>';
     }
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
