@@ -23,22 +23,19 @@ const backendUrl = new URL(BACKEND_HTTP_URL);
 db.init(DATA_DIR);
 db.startQueueFlusher();
 
-// --- Init Elasticsearch (optional, graceful fallback) ---
-const ES_URL = process.env.ES_URL || '';
-if (ES_URL) {
-  es.init(ES_URL).then(() => {
-    if (es.getClient()) {
-      sync.setDb(db);
-      sync.startSyncWorker();
-    }
-  }).catch(err => {
-    console.error('[es] Init failed, using SQLite-only:', err.message);
-  });
-} else {
-  console.log('[es] ES_URL not set, using SQLite for all queries');
+// --- Init Elasticsearch (required, blocking) ---
+const ES_URL = process.env.ES_URL;
+if (!ES_URL) {
+  console.error('[es] ES_URL not set. Required. Exiting.');
+  process.exit(1);
 }
 
-// --- Express (admin dashboard + API) ---
+async function startup() {
+  await es.init(ES_URL); // Throws on failure — no fallback
+  sync.setDb(db);
+  sync.startSyncWorker();
+
+  // --- Express (admin dashboard + API) ---
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -333,10 +330,16 @@ app.set('backend host', BACKEND_HOST);
 app.set('backend scheme', BACKEND_SCHEME);
 
 server.listen(PORT, () => {
-  console.log(`🍯 Honey listening on :${PORT}`);
-  console.log(`   Backend WS:   ${BACKEND_WS_URL}`);
-  console.log(`   Backend HTTP: ${BACKEND_HTTP_URL}`);
-  console.log(`   Dashboard:    http://localhost:${PORT}/`);
-  geoWorker();
-  profileWorker();
+    console.log(`🍯 Honey listening on :${PORT}`);
+    console.log(`   Backend WS:   ${BACKEND_WS_URL}`);
+    console.log(`   Backend HTTP: ${BACKEND_HTTP_URL}`);
+    console.log(`   Dashboard:    http://localhost:${PORT}/`);
+    geoWorker();
+    profileWorker();
+  });
+}
+
+startup().catch(err => {
+  console.error('[startup] Fatal:', err.message);
+  process.exit(1);
 });

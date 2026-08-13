@@ -4,9 +4,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - BACKEND_HOST=${BACKEND_HOST:-localhost:8008}
-      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
-      - ES_URL=${ES_URL:-http://elasticsearch:9200}
+      - BACKEND_HOST=${BACKEND_HOST}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - ES_URL=http://elasticsearch:9200
     volumes:
       - honey-data:/app/data
     restart: unless-stopped
@@ -19,15 +19,17 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - BACKEND_HOST=${BACKEND_HOST:-host.docker.internal:8008}
-      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
-      - ES_URL=${ES_URL:-http://localhost:9200}
+      - BACKEND_HOST=${BACKEND_HOST}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - ES_URL=http://elasticsearch:9200
     volumes:
       - ./:/app
       - /app/node_modules
       - honey-dev-data:/app/data
     command: node --watch src/index.js
     restart: "no"
+    depends_on:
+      - elasticsearch
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0

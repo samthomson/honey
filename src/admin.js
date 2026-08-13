@@ -1,15 +1,9 @@
 const express = require('express');
 const db = require('./db');
-const { getClient } = require('./es');
 const esQueries = require('./es-queries');
 
 function createAdminRouter() {
   const router = express.Router();
-
-  // Use ES queries if client is available, else fall back to SQLite
-  function q() {
-    return getClient() ? esQueries : db;
-  }
 
   // Wrap async ES handlers
   const wrap = (fn) => (req, res) => {
@@ -20,31 +14,31 @@ function createAdminRouter() {
   };
 
   // ─── Stats ───
-  router.get('/stats', wrap(async (req, res) => res.json(await q().getStats())));
-  router.get('/reader-stats', wrap(async (req, res) => res.json(await q().getReaderStats())));
-  router.get('/activity', wrap(async (req, res) => res.json(await q().getActivity())));
+  router.get('/stats', wrap(async (req, res) => res.json(await esQueries.getStats())));
+  router.get('/reader-stats', wrap(async (req, res) => res.json(await esQueries.getReaderStats())));
+  router.get('/activity', wrap(async (req, res) => res.json(await esQueries.getActivity())));
   router.get('/top-ips', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-    res.json(await q().getTopIps(limit));
+    res.json(await esQueries.getTopIps(limit));
   }));
 
   // ─── Connections / Events / Subscriptions ───
   router.get('/connections', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await q().getConnections(limit, offset));
+    res.json(await esQueries.getConnections(limit, offset));
   }));
 
   router.get('/events', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await q().getEvents(limit, offset));
+    res.json(await esQueries.getEvents(limit, offset));
   }));
 
   router.get('/subscriptions', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await q().getSubscriptions(limit, offset));
+    res.json(await esQueries.getSubscriptions(limit, offset));
   }));
 
   // ─── Pubkeys ───
@@ -52,7 +46,7 @@ function createAdminRouter() {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const filter = req.query.filter || 'publishers';
-    const rows = await q().getPubkeys(limit, offset, filter);
+    const rows = await esQueries.getPubkeys(limit, offset, filter);
 
     // Attach cached profiles (always from SQLite — profiles are small/fast)
     const pubkeys = rows.filter(r => r.pubkey).map(r => r.pubkey);
@@ -71,7 +65,7 @@ function createAdminRouter() {
   }));
 
   router.get('/pubkeys/:pubkey', wrap(async (req, res) => {
-    const detail = await q().getPubkeyDetail(req.params.pubkey);
+    const detail = await esQueries.getPubkeyDetail(req.params.pubkey);
     if (!detail) return res.status(404).json({ error: 'Not found' });
 
     // Attach profile from SQLite
@@ -87,20 +81,20 @@ function createAdminRouter() {
   router.get('/pubkeys/:pubkey/events', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await q().getPubkeyEvents(req.params.pubkey, limit, offset));
+    res.json(await esQueries.getPubkeyEvents(req.params.pubkey, limit, offset));
   }));
 
   router.get('/pubkeys/:pubkey/subscriptions', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await q().getPubkeySubscriptions(req.params.pubkey, limit, offset));
+    res.json(await esQueries.getPubkeySubscriptions(req.params.pubkey, limit, offset));
   }));
 
-  router.get('/pubkeys/:pubkey/ips', wrap(async (req, res) => res.json(await q().getPubkeyIps(req.params.pubkey))));
+  router.get('/pubkeys/:pubkey/ips', wrap(async (req, res) => res.json(await esQueries.getPubkeyIps(req.params.pubkey))));
 
   // ─── IP Detail ───
   router.get('/ips/:ip/detail', wrap(async (req, res) => {
-    const detail = await q().getIpDetail(req.params.ip);
+    const detail = await esQueries.getIpDetail(req.params.ip);
     if (!detail) return res.status(404).json({ error: 'Not found' });
     res.json(detail);
   }));
@@ -121,11 +115,11 @@ function createAdminRouter() {
   });
 
   // ─── Geo ───
-  router.get('/geo/all', wrap(async (req, res) => res.json(await q().getAllGeo())));
-  router.get('/geo/pubkey/:pubkey', wrap(async (req, res) => res.json(await q().getGeoForPubkey(req.params.pubkey))));
+  router.get('/geo/all', wrap(async (req, res) => res.json(await esQueries.getAllGeo())));
+  router.get('/geo/pubkey/:pubkey', wrap(async (req, res) => res.json(await esQueries.getGeoForPubkey(req.params.pubkey))));
   router.get('/geo/status', wrap(async (req, res) => {
     const pubkey = req.query.pubkey;
-    const stats = await (pubkey ? q().getGeoStatsForPubkey(pubkey) : q().getGeoStats());
+    const stats = await (pubkey ? esQueries.getGeoStatsForPubkey(pubkey) : esQueries.getGeoStats());
     // Trigger background geocoding if uncached IPs exist (always SQLite — it's the source of truth for geocoding)
     if (stats.uncached > 0) {
       const ips = pubkey ? db.getUniqueIpsForPubkey(pubkey) : db.getAllUniqueIps();

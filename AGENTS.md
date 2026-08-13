@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Principles
+
+- **No fallbacks.** Something works or it doesn't. If it doesn't, fail and throw errors. Surface errors, don't plan for failure.
+- **No default env vars for required services.** If a value is needed, it must be explicitly set. No silent defaults that might be wrong.
+- **Hardcode service-to-service URLs within a compose project.** The hostname is always the container name. It won't change. No env var needed.
+
 ## Boundaries
 
 - Do not include personal context, conversations, or private details in public files (README, comments, commit messages)

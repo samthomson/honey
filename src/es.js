@@ -84,9 +84,8 @@ async function init(url) {
       break;
     } catch (err) {
       if (retries === 0) {
-        console.error('[es] Could not connect, running in SQLite-only mode:', err.message);
-        client = null;
-        return null;
+        console.error('[es] Could not connect after retries:', err.message);
+        throw err;
       }
       await new Promise(r => setTimeout(r, 2000));
     }

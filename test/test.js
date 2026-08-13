@@ -99,6 +99,16 @@ process.env.BACKEND_SCHEME = 'ws';
 process.env.PORT = String(HONEY_PORT);
 process.env.DATA_DIR = DATA_DIR;
 process.env.LOG_FLUSH_INTERVAL_MS = '50';
+process.env.ES_URL = process.env.ES_URL || 'http://localhost:9200';
+
+// Check if ES is running — tests require it
+function checkEs() {
+  return new Promise((resolve) => {
+    const req = http.get('http://localhost:9200', (res) => { res.resume(); resolve(res.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.setTimeout(3000, () => { req.destroy(); resolve(false); });
+  });
+}
 
 const db = require('../src/db');
 db.init(DATA_DIR);
@@ -119,6 +129,13 @@ function httpGet(url, headers = {}) {
 }
 
 async function run() {
+  const esRunning = await checkEs();
+  if (!esRunning) {
+    console.log('⚠️  Elasticsearch not running on localhost:9200.');
+    console.log('    Tests require ES. Start it: docker run -e discovery.type=single-node -e xpack.security.enabled=false -p 9200:9200 docker.elastic.co/elasticsearch/elasticsearch:8.15.0');
+    process.exit(1);
+  }
+
   console.log('Running Honey tests...\n');
   await sleep(500);
 
