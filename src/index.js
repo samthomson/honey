@@ -27,10 +27,12 @@ db.startQueueFlusher();
 const ES_URL = process.env.ES_URL || '';
 if (ES_URL) {
   es.init(ES_URL).then(() => {
-    sync.setDb(db);
-    sync.startSyncWorker();
+    if (es.getClient()) {
+      sync.setDb(db);
+      sync.startSyncWorker();
+    }
   }).catch(err => {
-    console.error('[es] Init failed, falling back to SQLite-only queries:', err.message);
+    console.error('[es] Init failed, using SQLite-only:', err.message);
   });
 } else {
   console.log('[es] ES_URL not set, using SQLite for all queries');

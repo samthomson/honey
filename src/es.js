@@ -72,19 +72,21 @@ const INDEX_SETTINGS = {
 
 async function init(url) {
   const esUrl = url || process.env.ES_URL || 'http://localhost:9200';
-  client = new Client({ node: esUrl, requestTimeout: 10000 });
+  const tempClient = new Client({ node: esUrl, requestTimeout: 5000 });
 
   // Wait for ES to be ready
-  let retries = 30;
+  let retries = 15;
   while (retries-- > 0) {
     try {
-      const health = await client.info();
+      const health = await tempClient.info();
       console.log(`[es] Connected to Elasticsearch: ${health.version.number}`);
+      client = tempClient; // Only set client after confirmed connection
       break;
     } catch (err) {
       if (retries === 0) {
-        console.error('[es] Could not connect after 30 retries:', err.message);
-        throw err;
+        console.error('[es] Could not connect, running in SQLite-only mode:', err.message);
+        client = null;
+        return null;
       }
       await new Promise(r => setTimeout(r, 2000));
     }
