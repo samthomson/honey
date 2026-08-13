@@ -122,6 +122,10 @@ function prepareStatements() {
   stmtInsertSubClose = db.prepare('INSERT INTO subscription_closes (connection_id, ip, subscription_id, logged_at) VALUES (?, ?, ?, ?)');
 }
 
+// Map temp IDs → real SQLite row IDs, resolved during flush
+const tempIdMap = new Map();
+let nextTempId = -1;
+
 function flushWriteQueue() {
   if (writeQueue.length === 0) return;
   const batch = writeQueue.splice(0, writeQueue.length);
@@ -130,23 +134,24 @@ function flushWriteQueue() {
     for (const op of batch) {
       switch (op.type) {
         case 'connection':
-          op.connId = stmtInsertConnection.run(op.ip, op.ua, op.ts).lastInsertRowid;
+          const realId = stmtInsertConnection.run(op.ip, op.ua, op.ts).lastInsertRowid;
+          tempIdMap.set(op.tempId, realId);
           break;
         case 'disconnection':
-          stmtUpdateDisconnection.run(op.ts, op.connId);
+          stmtUpdateDisconnection.run(op.ts, tempIdMap.get(op.connId) || op.connId);
           break;
         case 'pubkey':
-          stmtUpdateConnPubkey.run(op.pubkey, op.connId, op.pubkey);
+          stmtUpdateConnPubkey.run(op.pubkey, tempIdMap.get(op.connId) || op.connId, op.pubkey);
           break;
         case 'event':
-          stmtInsertEvent.run(op.connId, op.ip, op.eventId, op.pubkey, op.kind, op.createdAt, op.tags, op.content, op.contentLen, op.ts);
-          if (op.pubkey) stmtUpdateConnPubkey.run(op.pubkey, op.connId, op.pubkey);
+          stmtInsertEvent.run(tempIdMap.get(op.connId) || op.connId, op.ip, op.eventId, op.pubkey, op.kind, op.createdAt, op.tags, op.content, op.contentLen, op.ts);
+          if (op.pubkey) stmtUpdateConnPubkey.run(op.pubkey, tempIdMap.get(op.connId) || op.connId, op.pubkey);
           break;
         case 'subscription':
-          stmtInsertSubscription.run(op.connId, op.ip, op.subId, op.filters, op.ts);
+          stmtInsertSubscription.run(tempIdMap.get(op.connId) || op.connId, op.ip, op.subId, op.filters, op.ts);
           break;
         case 'sub_close':
-          stmtInsertSubClose.run(op.connId, op.ip, op.subId, op.ts);
+          stmtInsertSubClose.run(tempIdMap.get(op.connId) || op.connId, op.ip, op.subId, op.ts);
           break;
       }
     }
@@ -167,18 +172,14 @@ function startQueueFlusher() {
   process.on('beforeExit', flushWriteQueue);
 }
 
-// ─── Connection logging (queued) ───
-// Returns a placeholder connId of null — it gets resolved during flush.
-// For connection logging we need the connId for subsequent messages, so we
-// use a synchronous insert for connections only (it's once per connection, not per message).
+// ─── Connection logging (fully async) ───
+// Returns a temp ID immediately (no DB access). The real SQLite ID is resolved
+// during flush when the connection INSERT runs in the same batch as its events.
 
 function logConnection(ip, userAgent) {
-  // Connection creation is once-per-session and we need the ID synchronously.
-  // Keep this one sync — it's a single INSERT, not a hot path.
-  return stmtInsertConnection
-    ? stmtInsertConnection.run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid
-    : db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)')
-        .run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid;
+  const tempId = nextTempId--;
+  writeQueue.push({ type: 'connection', tempId, ip, ua: userAgent, ts: Math.floor(Date.now() / 1000) });
+  return tempId;
 }
 
 function logDisconnection(connId) {
