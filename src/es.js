@@ -72,7 +72,7 @@ const INDEX_SETTINGS = {
 
 async function init(url) {
   const esUrl = url || process.env.ES_URL || 'http://localhost:9200';
-  const tempClient = new Client({ node: esUrl, requestTimeout: 5000 });
+  const tempClient = new Client({ node: esUrl, requestTimeout: 30000 });
 
   // Wait for ES to be ready
   let retries = 15;
