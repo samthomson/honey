@@ -137,7 +137,20 @@ async function run() {
   }
 
   console.log('Running Honey tests...\n');
-  await sleep(500);
+
+  // Wait for Honey server to be ready (startup is async — ES init + server.listen)
+  let honeyReady = false;
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    try {
+      const r = await httpGet(`http://localhost:${HONEY_PORT}/`);
+      if (r.status === 200) { honeyReady = true; break; }
+    } catch {}
+  }
+  if (!honeyReady) {
+    console.error('Honey server did not start within 15s. Aborting.');
+    process.exit(1);
+  }
 
   // === TEST 1: Connection passthrough ===
   console.log('Test 1: Connection passthrough');
