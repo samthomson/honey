@@ -44,15 +44,16 @@ async function getReaderStats() {
   };
 }
 
-async function getTopIps(limit = 20) {
+async function getTopIps(limit = 20, offset = 0) {
   const es = getClient();
+  const fetchSize = limit + offset;
   // Get top IPs by connection count, then enrich with event/sub counts
   const topByConns = await es.search({
     index: INDICES.connections, size: 0,
     body: {
       aggs: {
         top_ips: {
-          terms: { field: 'ip', size: limit },
+          terms: { field: 'ip', size: fetchSize },
           aggs: {
             pubkeys: { cardinality: { field: 'pubkey' } },
           },
@@ -61,7 +62,11 @@ async function getTopIps(limit = 20) {
     },
   });
 
-  const ips = topByConns.aggregations.top_ips.buckets;
+  const allIps = topByConns.aggregations.top_ips.buckets;
+  if (!allIps.length) return [];
+
+  // Slice for the requested page
+  const ips = allIps.slice(offset, offset + limit);
   if (!ips.length) return [];
 
   // Batch: get event counts and sub counts for these IPs
@@ -140,14 +145,15 @@ async function getConnections(limit, offset) {
   return result.hits.hits.map(h => ({ _id: h._id, ...h._source }));
 }
 
-async function getEvents(limit, offset) {
+async function getEvents(limit, offset, kinds) {
   const es = getClient();
+  const query = (kinds && kinds.length) ? { terms: { kind: kinds } } : { match_all: {} };
   const result = await es.search({
     index: INDICES.events,
     size: limit, from: offset,
     body: {
+      query,
       sort: [{ logged_at: { order: 'desc' } }],
-      // Join geo data for display
     },
   });
 
@@ -649,9 +655,24 @@ async function getIpDetail(ip) {
   };
 }
 
+async function getEventKinds() {
+  const es = getClient();
+  const result = await es.search({
+    index: INDICES.events, size: 0,
+    body: {
+      aggs: {
+        kinds: {
+          terms: { field: 'kind', size: 100, order: { _count: 'desc' } },
+        },
+      },
+    },
+  });
+  return result.aggregations.kinds.buckets.map(b => ({ kind: b.key, count: b.doc_count }));
+}
+
 module.exports = {
   getStats, getReaderStats, getTopIps, getActivity,
-  getConnections, getEvents, getSubscriptions,
+  getConnections, getEvents, getEventKinds, getSubscriptions,
   getPubkeys, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps,
   getAllGeo, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey,
   getIpDetail,

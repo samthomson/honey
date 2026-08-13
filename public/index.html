@@ -129,6 +129,8 @@ let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
 let selectedIp=null;
 let sortKey=null,sortDir='desc';
 let userSearch='';
+let selectedKinds=[],kindFilterVisible=false,allKinds=[];
+let tablePage=0;
 const PER_PAGE=20,API_TIMEOUT=15000;
 
 function getToken(){try{const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);const clean=location.pathname+location.hash;history.replaceState({},'',clean);return t}}catch(e){}return localStorage.getItem('honey_token')||''}
@@ -214,7 +216,7 @@ async function loadChart(){
 // --- Hash Routing ---
 function routeFromHash(){
   const h=location.hash.slice(1);const parts=h.split('/');
-  selectedPubkey=null;selectedIp=null;userFilter='publishers';userEventPage=0;
+  selectedPubkey=null;selectedIp=null;userFilter='publishers';userEventPage=0;tablePage=0;selectedKinds=[];kindFilterVisible=false;
   if(parts[0]==='users'&&parts[1]){selectedPubkey=parts[1];currentTab='users'}
   else if(parts[0]==='map'&&parts[1]){selectedPubkey=parts[1];currentTab='map'}
   else if(parts[0]==='ips'&&parts[1]){selectedIp=decodeURIComponent(parts[1]);currentTab='ip-detail'}
@@ -240,14 +242,46 @@ function breadcrumb(){
 // --- Navigation ---
 function showPubkeyDetail(pk){navigate('users',pk)}
 function backToList(){navigate('users')}
-function setUserFilter(f){userFilter=f;selectedPubkey=null;userEventPage=0;loadTable()}
+function setUserFilter(f){userFilter=f;selectedPubkey=null;userEventPage=0;tablePage=0;loadTable()}
 let searchTimer=null;
-function setUserSearch(v){userSearch=v;clearTimeout(searchTimer);searchTimer=setTimeout(loadTable,300)}
-function setSort(k){if(sortKey===k){sortDir=sortDir==='asc'?'desc':'asc'}else{sortKey=k;sortDir='desc'}loadTable()}
+function setUserSearch(v){userSearch=v;tablePage=0;clearTimeout(searchTimer);searchTimer=setTimeout(loadTable,300)}
+function setSort(k){if(sortKey===k){sortDir=sortDir==='asc'?'desc':'asc'}else{sortKey=k;sortDir='desc'}tablePage=0;loadTable()}
 function sortRows(rows){if(!sortKey)return rows;return rows.sort((a,b)=>{let va=a[sortKey],vb=b[sortKey];if(typeof va==='number'&&typeof vb==='number')return sortDir==='asc'?va-vb:vb-va;if(va==null)va='';if(vb==null)vb='';return sortDir==='asc'?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va))})}
 function sortHeader(label,key){const cls=sortKey===key?('sortable '+(sortDir==='asc'?'sort-asc':'sort-desc')):'sortable';return`<th class="${cls}" onclick="setSort('${key}')">${label}</th>`}
 function showIpDetail(ip){selectedIp=ip;location.hash='ips/'+encodeURIComponent(ip)}
 function showUserMap(pk){navigate('map',pk)}
+function prevPage(){if(tablePage>0){tablePage--;loadTable()}}
+function nextPage(){tablePage++;loadTable()}
+function paginationHTML(rowsLength){return '<div class="pagination"><button onclick="prevPage()" '+(tablePage===0?'disabled':'')+'>\u2190 Prev</button><span style="color:var(--muted);font-size:.78rem;padding:5px 0">Page '+(tablePage+1)+'</span><button onclick="nextPage()" '+(rowsLength<PER_PAGE?'disabled':'')+'>Next \u2192</button></div>'}
+async function toggleKindFilter(){
+  kindFilterVisible=!kindFilterVisible;
+  if(kindFilterVisible){allKinds=await api('/events/kinds')}
+  renderKindFilter();
+}
+function renderKindFilter(){
+  const panel=document.getElementById('kind-filter-panel');
+  if(!panel)return;
+  if(!kindFilterVisible||!allKinds.length){panel.innerHTML='';return}
+  let html='<div id="kind-filter-dropdown" style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px;z-index:100;max-height:300px;overflow-y:auto;margin-top:4px">';
+  html+='<div style="display:flex;flex-direction:column;gap:4px">';
+  for(const k of allKinds){
+    const checked=selectedKinds.length===0||selectedKinds.includes(String(k.kind));
+    html+='<label style="font-size:.78rem;cursor:pointer;display:flex;align-items:center;gap:6px"><input type="checkbox" value="'+k.kind+'" '+(checked?'checked':'')+' style="margin:0"><span class="kind-badge '+kc(k.kind)+'">'+k.kind+'</span><span style="color:var(--muted)">'+k.count+'</span></label>';
+  }
+  html+='</div>';
+  html+='<button onclick="applyKindFilter()" style="margin-top:8px;background:var(--accent);color:#000;border:none;padding:6px 14px;border-radius:var(--radius);cursor:pointer;font-size:.78rem;width:100%">Update</button>';
+  html+='</div>';
+  panel.innerHTML=html;
+}
+function applyKindFilter(){
+  const checkboxes=document.querySelectorAll('#kind-filter-dropdown input[type=checkbox]');
+  const checked=[];
+  checkboxes.forEach(cb=>{if(cb.checked)checked.push(cb.value)});
+  const all=checkboxes.length===checked.length;
+  selectedKinds=all?[]:checked;
+  tablePage=0;kindFilterVisible=false;
+  loadTable();
+}
 
 // --- Map ---
 function destroyMap(){if(map){map.remove();map=null;mapMarkers=[]}if(geoPollTimer){clearTimeout(geoPollTimer);geoPollTimer=null}}
@@ -464,25 +498,39 @@ async function loadTable(){
 
   try{
     if(currentTab==='connections'){
-      const rows=await api('/connections?limit=100');
-      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>ID</th><th>IP</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>'+(
+      const offset=tablePage*PER_PAGE;
+      const rows=await api('/connections?limit='+PER_PAGE+'&offset='+offset);
+      let html='<div class="table-wrap"><table><thead><tr><th>ID</th><th>IP</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>'+(
         rows.length?rows.map(r=>`<tr><td>#${r.id}</td><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">No connections</td></tr>'
       )+'</tbody></table></div>';
+      html+=paginationHTML(rows.length);
+      area.innerHTML=html;
     }else if(currentTab==='events'){
-      const rows=await api('/events?limit=100');
-      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>Kind</th><th>Content</th><th>Pubkey</th><th>IP</th><th>Time</th></tr></thead><tbody>'+(
+      const offset=tablePage*PER_PAGE;
+      const kindsParam=selectedKinds.length?'&kinds='+encodeURIComponent(selectedKinds.join(',')):'';
+      const rows=await api('/events?limit='+PER_PAGE+'&offset='+offset+kindsParam);
+      const filterLabel=selectedKinds.length?` (${selectedKinds.length} kinds)`:'';
+      let html=`<div style="margin-bottom:10px;position:relative"><button onclick="toggleKindFilter()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:var(--radius);cursor:pointer;font-size:.78rem">🔍 Filter Kinds${filterLabel}</button><div id="kind-filter-panel"></div></div>`;
+      html+='<div class="table-wrap"><table><thead><tr><th>Kind</th><th>Content</th><th>Pubkey</th><th>IP</th><th>Time</th></tr></thead><tbody>'+(
         rows.length?rows.map(r=>{
           let cp=tr(r.content||'',50);
           return`<tr class="event-row" onclick="openEv('${storeEv(r)}')"><td><span class="kind-badge ${kc(r.kind)}">${r.kind}</span></td><td class="event-content">${esc(cp)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="ip">${esc(r.ip)}</td><td class="duration">${fmtTime(r.logged_at)}</td></tr>`
         }).join(''):'<tr><td colspan="5" class="empty">No events</td></tr>'
       )+'</tbody></table></div>';
+      html+=paginationHTML(rows.length);
+      area.innerHTML=html;
+      if(kindFilterVisible)renderKindFilter();
     }else if(currentTab==='subscriptions'){
-      const rows=await api('/subscriptions?limit=100');
-      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>'+(
+      const offset=tablePage*PER_PAGE;
+      const rows=await api('/subscriptions?limit='+PER_PAGE+'&offset='+offset);
+      let html='<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>'+(
         rows.length?rows.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="mono">${esc(tr(r.subscription_id,16))}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No subs</td></tr>'
       )+'</tbody></table></div>';
+      html+=paginationHTML(rows.length);
+      area.innerHTML=html;
     }else if(currentTab==='users'){
-      const params=new URLSearchParams({limit:'100'});
+      const offset=tablePage*PER_PAGE;
+      const params=new URLSearchParams({limit:String(PER_PAGE),offset:String(offset)});
       if(userFilter==='readers')params.set('filter','readers');
       if(userSearch)params.set('q',userSearch);
       if(sortKey){params.set('sort',sortKey);params.set('dir',sortDir)}
@@ -503,13 +551,17 @@ async function loadTable(){
           }).join(''):'<tr><td colspan="7" class="empty">No publishers</td></tr>'
         )+'</tbody></table></div>';
       }
+      html+=paginationHTML(rows.length);
       area.innerHTML=html;
     }else if(currentTab==='ips'){
-      const rows=await api('/top-ips?limit=50');
+      const offset=tablePage*PER_PAGE;
+      const rows=await api('/top-ips?limit='+PER_PAGE+'&offset='+offset);
       const sortedI=sortRows(rows);
-      area.innerHTML='<div class="table-wrap"><table><thead><tr><th>#</th>'+sortHeader('IP','ip')+sortHeader('Conn','connections')+sortHeader('Ev','events')+sortHeader('Sub','subscriptions')+'</tr></thead><tbody>'+(
-        sortedI.length?sortedI.map((r,i)=>`<tr><td>${i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No data</td></tr>'
+      let html='<div class="table-wrap"><table><thead><tr><th>#</th>'+sortHeader('IP','ip')+sortHeader('Conn','connections')+sortHeader('Ev','events')+sortHeader('Sub','subscriptions')+'</tr></thead><tbody>'+(
+        sortedI.length?sortedI.map((r,i)=>`<tr><td>${offset+i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No data</td></tr>'
       )+'</tbody></table></div>';
+      html+=paginationHTML(rows.length);
+      area.innerHTML=html;
     }
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }

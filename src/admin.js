@@ -19,7 +19,8 @@ function createAdminRouter() {
   router.get('/activity', wrap(async (req, res) => res.json(await esQueries.getActivity())));
   router.get('/top-ips', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-    res.json(await esQueries.getTopIps(limit));
+    const offset = parseInt(req.query.offset) || 0;
+    res.json(await esQueries.getTopIps(limit, offset));
   }));
 
   // ─── Connections / Events / Subscriptions ───
@@ -29,10 +30,15 @@ function createAdminRouter() {
     res.json(await esQueries.getConnections(limit, offset));
   }));
 
+  router.get('/events/kinds', wrap(async (req, res) => {
+    res.json(await esQueries.getEventKinds());
+  }));
+
   router.get('/events', wrap(async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
-    res.json(await esQueries.getEvents(limit, offset));
+    const kinds = req.query.kinds ? req.query.kinds.split(',').map(Number) : null;
+    res.json(await esQueries.getEvents(limit, offset, kinds));
   }));
 
   router.get('/subscriptions', wrap(async (req, res) => {
