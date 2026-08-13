@@ -6,9 +6,12 @@ services:
     environment:
       - BACKEND_HOST=${BACKEND_HOST:-localhost:8008}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - ES_URL=${ES_URL:-http://elasticsearch:9200}
     volumes:
       - honey-data:/app/data
     restart: unless-stopped
+    depends_on:
+      - elasticsearch
 
   honey-dev:
     build: .
@@ -18,6 +21,7 @@ services:
     environment:
       - BACKEND_HOST=${BACKEND_HOST:-host.docker.internal:8008}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - ES_URL=${ES_URL:-http://localhost:9200}
     volumes:
       - ./:/app
       - /app/node_modules
@@ -25,6 +29,21 @@ services:
     command: node --watch src/index.js
     restart: "no"
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - cluster.name=honey-es
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
+    mem_limit: 2g
+
 volumes:
   honey-data:
   honey-dev-data:
+  es-data:

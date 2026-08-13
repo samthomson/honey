@@ -4,6 +4,8 @@ const { WebSocketServer, WebSocket } = require('ws');
 const path = require('path');
 const db = require('./db');
 const createAdminRouter = require('./admin');
+const es = require('./es');
+const sync = require('./sync');
 
 // --- Config ---
 const BACKEND_HOST = process.env.BACKEND_HOST || 'localhost:8008';
@@ -20,6 +22,19 @@ const backendUrl = new URL(BACKEND_HTTP_URL);
 // --- Init DB ---
 db.init(DATA_DIR);
 db.startQueueFlusher();
+
+// --- Init Elasticsearch (optional, graceful fallback) ---
+const ES_URL = process.env.ES_URL || '';
+if (ES_URL) {
+  es.init(ES_URL).then(() => {
+    sync.setDb(db);
+    sync.startSyncWorker();
+  }).catch(err => {
+    console.error('[es] Init failed, falling back to SQLite-only queries:', err.message);
+  });
+} else {
+  console.log('[es] ES_URL not set, using SQLite for all queries');
+}
 
 // --- Express (admin dashboard + API) ---
 const app = express();

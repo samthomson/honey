@@ -646,8 +646,10 @@ function getAllPubkeys() {
   return db.prepare('SELECT DISTINCT pubkey FROM published_events WHERE pubkey IS NOT NULL').all().map(r => r.pubkey);
 }
 
+function getRawDb() { return db; }
+
 module.exports = {
-  init, startQueueFlusher, flushWriteQueue,
+  init, startQueueFlusher, flushWriteQueue, getRawDb,
   logConnection, logDisconnection, updateConnectionPubkey,
   logPublishedEvent, logSubscription, logSubscriptionClose,
   getStats, getConnections, getEvents, getSubscriptions, getTopIps, getActivity,
