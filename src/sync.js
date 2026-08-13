@@ -226,14 +226,24 @@ async function runSync() {
 
 function startSyncWorker() {
   if (timer) return;
-  // Initial sync after 10s (give ES time to init)
   setTimeout(() => {
-    runSync().then(() => {
+    runSync().then(async () => {
+      // If ES was empty, do a full backfill
+      const es = getClient();
+      if (es) {
+        const [connCount, eventCount] = await Promise.all([
+          es.count({ index: INDICES.connections }).catch(() => ({ count: 0 })),
+          es.count({ index: INDICES.events }).catch(() => ({ count: 0 })),
+        ]);
+        if (connCount.count === 0 && eventCount.count === 0) {
+          console.log('[sync] ES indices empty, running full backfill...');
+          await fullReindex();
+        }
+      }
       timer = setInterval(runSync, SYNC_INTERVAL_MS);
       console.log(`[sync] Worker started, interval: ${SYNC_INTERVAL_MS}ms`);
     }).catch(err => {
       console.error('[sync] Initial sync failed:', err.message);
-      // Retry starting worker after 30s
       setTimeout(startSyncWorker, 30000);
     });
   }, 10000);
