@@ -19,6 +19,7 @@ const backendUrl = new URL(BACKEND_HTTP_URL);
 
 // --- Init DB ---
 db.init(DATA_DIR);
+db.startQueueFlusher();
 
 // --- Express (admin dashboard + API) ---
 const app = express();
@@ -197,6 +198,14 @@ wss.on('connection', (clientWs, req) => {
   });
 
   clientWs.on('message', (data, isBinary) => {
+    // Forward to backend FIRST — user sees zero DB latency
+    if (backendWs.readyState === WebSocket.OPEN) {
+      backendWs.send(data, { binary: isBinary });
+    } else if (backendWs.readyState === WebSocket.CONNECTING) {
+      messageQueue.push({ data, isBinary });
+    }
+
+    // Then log asynchronously (queued, flushed in batch)
     if (!isBinary) {
       try {
         const msg = JSON.parse(data.toString());
@@ -237,12 +246,6 @@ wss.on('connection', (clientWs, req) => {
       } catch {
         // Not valid JSON
       }
-    }
-
-    if (backendWs.readyState === WebSocket.OPEN) {
-      backendWs.send(data, { binary: isBinary });
-    } else if (backendWs.readyState === WebSocket.CONNECTING) {
-      messageQueue.push({ data, isBinary });
     }
   });
 

@@ -98,6 +98,7 @@ process.env.BACKEND_HOST = `localhost:${FAKE_RELAY_PORT}`;
 process.env.BACKEND_SCHEME = 'ws';
 process.env.PORT = String(HONEY_PORT);
 process.env.DATA_DIR = DATA_DIR;
+process.env.LOG_FLUSH_INTERVAL_MS = '50';
 
 const db = require('../src/db');
 db.init(DATA_DIR);
@@ -138,6 +139,7 @@ async function run() {
   };
   client1.send(JSON.stringify(['EVENT', testEvent]));
   await sleep(300);
+  db.flushWriteQueue();
 
   assert(relayReceived.some(m => m.includes('test-event-id-123')), 'EVENT forwarded to backend relay');
 
@@ -160,6 +162,7 @@ async function run() {
   relayReceived = [];
   client1.send(JSON.stringify(['REQ', 'sub1', { kinds: [1], limit: 10 }]));
   await sleep(300);
+  db.flushWriteQueue();
 
   assert(relayReceived.some(m => m.includes('"sub1"')), 'REQ forwarded to backend relay');
   const subs = testDb.prepare('SELECT * FROM subscriptions WHERE subscription_id = ?').all('sub1');
@@ -176,6 +179,7 @@ async function run() {
   console.log('Test 5: CLOSE logging');
   client1.send(JSON.stringify(['CLOSE', 'sub1']));
   await sleep(300);
+  db.flushWriteQueue();
   const closes = testDb.prepare('SELECT * FROM subscription_closes WHERE subscription_id = ?').all('sub1');
   assert(closes.length === 1, 'CLOSE logged in SQLite');
 
@@ -183,6 +187,7 @@ async function run() {
   console.log('Test 6: Disconnection logging');
   client1.close();
   await sleep(300);
+  db.flushWriteQueue();
   const conns = testDb.prepare('SELECT * FROM connections').all();
   assert(conns.length >= 1, 'Connection logged');
   assert(conns[0]?.disconnected_at !== null, 'Disconnection logged');
@@ -249,6 +254,7 @@ async function run() {
   };
   authClient.send(JSON.stringify(['AUTH', authEvent]));
   await sleep(300);
+  db.flushWriteQueue();
 
   const authEvents = testDb.prepare('SELECT * FROM published_events WHERE kind = 22242').all();
   assert(authEvents.length >= 1, 'AUTH event (kind 22242) logged');

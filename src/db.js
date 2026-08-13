@@ -60,6 +60,8 @@ function init(dataDir) {
       subscription_id TEXT NOT NULL,
       logged_at INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_subclose_conn ON subscription_closes(connection_id);
+    CREATE INDEX IF NOT EXISTS idx_subclose_ip ON subscription_closes(ip);
 
     CREATE TABLE IF NOT EXISTS ip_geo (
       ip TEXT PRIMARY KEY,
@@ -98,42 +100,112 @@ function init(dataDir) {
   try { db.exec('ALTER TABLE published_events ADD COLUMN content TEXT'); } catch {}
 }
 
-// ─── Connection logging ───
+// ─── Write Queue (batched async writes) ───
+// Hot-path logging functions push to an in-memory queue.
+// A background timer flushes everything in a single transaction every ~1s.
+// This keeps the event loop unblocked for WebSocket forwarding.
+
+const writeQueue = [];
+let flushTimer = null;
+const FLUSH_INTERVAL_MS = parseInt(process.env.LOG_FLUSH_INTERVAL_MS || '1000', 10);
+
+// Pre-compiled statements (prepared once, reused across flushes)
+let stmtInsertConnection, stmtUpdateDisconnection, stmtUpdateConnPubkey,
+    stmtInsertEvent, stmtInsertSubscription, stmtInsertSubClose;
+
+function prepareStatements() {
+  stmtInsertConnection = db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)');
+  stmtUpdateDisconnection = db.prepare('UPDATE connections SET disconnected_at = ? WHERE id = ?');
+  stmtUpdateConnPubkey = db.prepare('UPDATE connections SET pubkey = ? WHERE id = ? AND (pubkey IS NULL OR pubkey != ?)');
+  stmtInsertEvent = db.prepare('INSERT INTO published_events (connection_id, ip, event_id, pubkey, kind, created_at, tags, content, content_len, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  stmtInsertSubscription = db.prepare('INSERT INTO subscriptions (connection_id, ip, subscription_id, filters, logged_at) VALUES (?, ?, ?, ?, ?)');
+  stmtInsertSubClose = db.prepare('INSERT INTO subscription_closes (connection_id, ip, subscription_id, logged_at) VALUES (?, ?, ?, ?)');
+}
+
+function flushWriteQueue() {
+  if (writeQueue.length === 0) return;
+  const batch = writeQueue.splice(0, writeQueue.length);
+  try {
+    db.exec('BEGIN');
+    for (const op of batch) {
+      switch (op.type) {
+        case 'connection':
+          op.connId = stmtInsertConnection.run(op.ip, op.ua, op.ts).lastInsertRowid;
+          break;
+        case 'disconnection':
+          stmtUpdateDisconnection.run(op.ts, op.connId);
+          break;
+        case 'pubkey':
+          stmtUpdateConnPubkey.run(op.pubkey, op.connId, op.pubkey);
+          break;
+        case 'event':
+          stmtInsertEvent.run(op.connId, op.ip, op.eventId, op.pubkey, op.kind, op.createdAt, op.tags, op.content, op.contentLen, op.ts);
+          if (op.pubkey) stmtUpdateConnPubkey.run(op.pubkey, op.connId, op.pubkey);
+          break;
+        case 'subscription':
+          stmtInsertSubscription.run(op.connId, op.ip, op.subId, op.filters, op.ts);
+          break;
+        case 'sub_close':
+          stmtInsertSubClose.run(op.connId, op.ip, op.subId, op.ts);
+          break;
+      }
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch {}
+    console.error('[db] Batch flush error:', err.message);
+    // Re-queue the items we failed to write
+    writeQueue.unshift(...batch);
+  }
+}
+
+function startQueueFlusher() {
+  if (flushTimer) return;
+  prepareStatements();
+  flushTimer = setInterval(flushWriteQueue, FLUSH_INTERVAL_MS);
+  // Flush on process exit (best effort)
+  process.on('beforeExit', flushWriteQueue);
+}
+
+// ─── Connection logging (queued) ───
+// Returns a placeholder connId of null — it gets resolved during flush.
+// For connection logging we need the connId for subsequent messages, so we
+// use a synchronous insert for connections only (it's once per connection, not per message).
 
 function logConnection(ip, userAgent) {
-  return db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)')
-    .run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid;
+  // Connection creation is once-per-session and we need the ID synchronously.
+  // Keep this one sync — it's a single INSERT, not a hot path.
+  return stmtInsertConnection
+    ? stmtInsertConnection.run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid
+    : db.prepare('INSERT INTO connections (ip, user_agent, connected_at) VALUES (?, ?, ?)')
+        .run(ip, userAgent, Math.floor(Date.now() / 1000)).lastInsertRowid;
 }
 
 function logDisconnection(connId) {
-  db.prepare('UPDATE connections SET disconnected_at = ? WHERE id = ?')
-    .run(Math.floor(Date.now() / 1000), connId);
+  writeQueue.push({ type: 'disconnection', connId, ts: Math.floor(Date.now() / 1000) });
 }
 
 function updateConnectionPubkey(connId, pubkey) {
   if (!pubkey) return;
-  db.prepare('UPDATE connections SET pubkey = ? WHERE id = ? AND (pubkey IS NULL OR pubkey != ?)')
-    .run(pubkey, connId, pubkey);
+  writeQueue.push({ type: 'pubkey', connId, pubkey });
 }
 
 function logPublishedEvent(connId, ip, event) {
-  db.prepare(
-    'INSERT INTO published_events (connection_id, ip, event_id, pubkey, kind, created_at, tags, content, content_len, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(
-    connId, ip, event.event_id, event.pubkey, event.kind, event.created_at,
-    event.tags, event.content || '', event.content_len, Math.floor(Date.now() / 1000)
-  );
-  if (event.pubkey) updateConnectionPubkey(connId, event.pubkey);
+  writeQueue.push({
+    type: 'event', connId, ip,
+    eventId: event.event_id, pubkey: event.pubkey, kind: event.kind,
+    createdAt: event.created_at, tags: event.tags,
+    content: event.content || '', contentLen: event.content_len,
+    ts: Math.floor(Date.now() / 1000),
+  });
 }
 
 function logSubscription(connId, ip, subId, filters) {
-  db.prepare('INSERT INTO subscriptions (connection_id, ip, subscription_id, filters, logged_at) VALUES (?, ?, ?, ?, ?)')
-    .run(connId, ip, subId, filters, Math.floor(Date.now() / 1000));
+  writeQueue.push({ type: 'subscription', connId, ip, subId, filters, ts: Math.floor(Date.now() / 1000) });
 }
 
 function logSubscriptionClose(connId, ip, subId) {
-  db.prepare('INSERT INTO subscription_closes (connection_id, ip, subscription_id, logged_at) VALUES (?, ?, ?, ?)')
-    .run(connId, ip, subId, Math.floor(Date.now() / 1000));
+  writeQueue.push({ type: 'sub_close', connId, ip, subId, ts: Math.floor(Date.now() / 1000) });
 }
 
 // ─── Profiles ───
@@ -326,12 +398,23 @@ function getGeoForIp(ip) {
 }
 
 function getAllGeo() {
+  // Pre-aggregate to avoid 3 correlated subqueries per geo row
   return db.prepare(`
+    WITH conn_counts AS (
+      SELECT ip, COUNT(DISTINCT id) as connections, COUNT(DISTINCT pubkey) as pubkeys
+      FROM connections GROUP BY ip
+    ),
+    event_counts AS (
+      SELECT ip, COUNT(DISTINCT id) as events FROM published_events GROUP BY ip
+    )
     SELECT g.*,
-      (SELECT COUNT(DISTINCT c.id) FROM connections c WHERE c.ip = g.ip) as connections,
-      (SELECT COUNT(DISTINCT pe.id) FROM published_events pe WHERE pe.ip = g.ip) as events,
-      (SELECT COUNT(DISTINCT c.pubkey) FROM connections c WHERE c.ip = g.ip AND c.pubkey IS NOT NULL) as pubkeys
-    FROM ip_geo g WHERE g.lat IS NOT NULL ORDER BY connections DESC
+      COALESCE(c.connections, 0) as connections,
+      COALESCE(e.events, 0) as events,
+      COALESCE(c.pubkeys, 0) as pubkeys
+    FROM ip_geo g
+    LEFT JOIN conn_counts c ON c.ip = g.ip
+    LEFT JOIN event_counts e ON e.ip = g.ip
+    WHERE g.lat IS NOT NULL ORDER BY connections DESC
   `).all();
 }
 
@@ -376,8 +459,15 @@ function getUniqueIpsForPubkey(pubkey) {
 
 // ─── Query functions ───
 
+// In-memory stats cache (30s TTL) — avoids 6 full-table scans on every dashboard load
+let _statsCache = null;
+let _statsCacheAt = 0;
+const STATS_TTL_MS = 30000;
+
 function getStats() {
-  return {
+  const now = Date.now();
+  if (_statsCache && (now - _statsCacheAt) < STATS_TTL_MS) return _statsCache;
+  _statsCache = {
     totalConnections: db.prepare('SELECT COUNT(*) as c FROM connections').get().c,
     uniqueIps: db.prepare('SELECT COUNT(DISTINCT ip) as c FROM connections').get().c,
     totalEvents: db.prepare('SELECT COUNT(*) as c FROM published_events').get().c,
@@ -385,6 +475,8 @@ function getStats() {
     activeConnections: db.prepare('SELECT COUNT(*) as c FROM connections WHERE disconnected_at IS NULL').get().c,
     uniquePubkeys: db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM published_events WHERE pubkey IS NOT NULL').get().c,
   };
+  _statsCacheAt = now;
+  return _statsCache;
 }
 
 function getConnections(limit, offset) {
@@ -405,12 +497,24 @@ function getSubscriptions(limit, offset) {
 }
 
 function getTopIps(limit) {
+  // Pre-aggregate each table separately, then join — avoids O(n) correlated subqueries
   return db.prepare(`
-    SELECT ip,
-      COUNT(DISTINCT c.id) as connections,
-      (SELECT COUNT(*) FROM published_events WHERE ip = c.ip) as events,
-      (SELECT COUNT(*) FROM subscriptions WHERE ip = c.ip) as subscriptions
-    FROM connections c GROUP BY ip ORDER BY connections DESC LIMIT ?
+    WITH conn_counts AS (
+      SELECT ip, COUNT(DISTINCT id) as connections FROM connections GROUP BY ip
+    ),
+    event_counts AS (
+      SELECT ip, COUNT(*) as events FROM published_events GROUP BY ip
+    ),
+    sub_counts AS (
+      SELECT ip, COUNT(*) as subscriptions FROM subscriptions GROUP BY ip
+    )
+    SELECT c.ip, c.connections,
+      COALESCE(e.events, 0) as events,
+      COALESCE(s.subscriptions, 0) as subscriptions
+    FROM conn_counts c
+    LEFT JOIN event_counts e ON e.ip = c.ip
+    LEFT JOIN sub_counts s ON s.ip = c.ip
+    ORDER BY c.connections DESC LIMIT ?
   `).all(limit);
 }
 
@@ -436,18 +540,33 @@ function getPubkeys(limit, offset, filter) {
       GROUP BY c.ip ORDER BY last_seen DESC LIMIT ? OFFSET ?
     `).all(limit, offset);
   }
+  // Pre-aggregate each table separately to avoid fan-out explosion from multi-table JOIN
   return db.prepare(`
-    SELECT pe.pubkey,
-      COUNT(DISTINCT pe.id) as event_count,
-      COUNT(DISTINCT s.id) as sub_count,
-      COUNT(DISTINCT pe.ip) as event_ips,
-      COUNT(DISTINCT c.id) as connections,
-      MIN(pe.logged_at) as first_seen, MAX(pe.logged_at) as last_seen
-    FROM published_events pe
-    LEFT JOIN connections c ON c.pubkey = pe.pubkey
-    LEFT JOIN subscriptions s ON s.connection_id = c.id
-    WHERE pe.pubkey IS NOT NULL
-    GROUP BY pe.pubkey ORDER BY last_seen DESC LIMIT ? OFFSET ?
+    WITH pe_agg AS (
+      SELECT pubkey,
+        COUNT(DISTINCT id) as event_count,
+        COUNT(DISTINCT ip) as event_ips,
+        MIN(logged_at) as first_seen, MAX(logged_at) as last_seen
+      FROM published_events WHERE pubkey IS NOT NULL GROUP BY pubkey
+    ),
+    conn_agg AS (
+      SELECT pubkey, COUNT(DISTINCT id) as connections
+      FROM connections WHERE pubkey IS NOT NULL GROUP BY pubkey
+    ),
+    sub_agg AS (
+      SELECT c.pubkey, COUNT(DISTINCT s.id) as sub_count
+      FROM subscriptions s JOIN connections c ON s.connection_id = c.id
+      WHERE c.pubkey IS NOT NULL GROUP BY c.pubkey
+    )
+    SELECT pe.pubkey, pe.event_count,
+      COALESCE(s.sub_count, 0) as sub_count,
+      pe.event_ips,
+      COALESCE(c.connections, 0) as connections,
+      pe.first_seen, pe.last_seen
+    FROM pe_agg pe
+    LEFT JOIN conn_agg c ON c.pubkey = pe.pubkey
+    LEFT JOIN sub_agg s ON s.pubkey = pe.pubkey
+    ORDER BY pe.last_seen DESC LIMIT ? OFFSET ?
   `).all(limit, offset);
 }
 
@@ -492,15 +611,46 @@ function getPubkeyIps(pubkey) {
   return db.prepare(`SELECT ip, COUNT(DISTINCT id) as connections, MIN(connected_at) as first_seen, MAX(connected_at) as last_seen FROM connections WHERE pubkey = ? GROUP BY ip ORDER BY last_seen DESC`).all(pubkey);
 }
 
+// ─── IP Detail (for map popup click-through) ───
+
+function getIpDetail(ip) {
+  const geo = db.prepare('SELECT * FROM ip_geo WHERE ip = ?').get(ip);
+  const connections = db.prepare(`
+    SELECT c.*, p.name, p.display_name, p.picture
+    FROM connections c LEFT JOIN profiles p ON c.pubkey = p.pubkey
+    WHERE c.ip = ? ORDER BY c.connected_at DESC LIMIT 50
+  `).all(ip);
+  const events = db.prepare(`
+    SELECT pe.*, p.name, p.display_name
+    FROM published_events pe LEFT JOIN profiles p ON pe.pubkey = p.pubkey
+    WHERE pe.ip = ? ORDER BY pe.logged_at DESC LIMIT 50
+  `).all(ip);
+  const subscriptions = db.prepare(`
+    SELECT s.*, c.pubkey FROM subscriptions s
+    LEFT JOIN connections c ON s.connection_id = c.id
+    WHERE s.ip = ? ORDER BY s.logged_at DESC LIMIT 50
+  `).all(ip);
+  const stats = {
+    connections: db.prepare('SELECT COUNT(*) as c FROM connections WHERE ip = ?').get(ip).c,
+    events: db.prepare('SELECT COUNT(*) as c FROM published_events WHERE ip = ?').get(ip).c,
+    subscriptions: db.prepare('SELECT COUNT(*) as c FROM subscriptions WHERE ip = ?').get(ip).c,
+    pubkeys: db.prepare('SELECT COUNT(DISTINCT pubkey) as c FROM connections WHERE ip = ? AND pubkey IS NOT NULL').get(ip).c,
+    first_seen: db.prepare('SELECT MIN(connected_at) as c FROM connections WHERE ip = ?').get(ip).c,
+    last_seen: db.prepare('SELECT MAX(connected_at) as c FROM connections WHERE ip = ?').get(ip).c,
+  };
+  return { ip, geo, stats, connections, events, subscriptions };
+}
+
 function getAllPubkeys() {
   return db.prepare('SELECT DISTINCT pubkey FROM published_events WHERE pubkey IS NOT NULL').all().map(r => r.pubkey);
 }
 
 module.exports = {
-  init, logConnection, logDisconnection, updateConnectionPubkey,
+  init, startQueueFlusher, flushWriteQueue,
+  logConnection, logDisconnection, updateConnectionPubkey,
   logPublishedEvent, logSubscription, logSubscriptionClose,
   getStats, getConnections, getEvents, getSubscriptions, getTopIps, getActivity,
-  getPubkeys, getReaderStats, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps,
+  getPubkeys, getReaderStats, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps, getIpDetail,
   // Geo
   geocodeIps, getGeoForIp, getAllGeo, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey, getAllUniqueIps, getUniqueIpsForPubkey,
   // Profiles

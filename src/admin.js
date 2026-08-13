@@ -84,6 +84,13 @@ function createAdminRouter() {
 
   router.get('/pubkeys/:pubkey/ips', (req, res) => res.json(db.getPubkeyIps(req.params.pubkey)));
 
+  // ─── IP Detail (map popup click-through) ───
+  router.get('/ips/:ip/detail', (req, res) => {
+    const detail = db.getIpDetail(req.params.ip);
+    if (!detail) return res.status(404).json({ error: 'Not found' });
+    res.json(detail);
+  });
+
   // ─── Profiles ───
   router.get('/profiles/:pubkey', (req, res) => {
     const profile = db.getProfile(req.params.pubkey);

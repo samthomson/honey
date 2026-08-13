@@ -121,6 +121,7 @@ const API='/api';
 let currentTab='connections',selectedPubkey=null,userFilter='publishers';
 let chart=null,map=null,mapMarkers=[];
 let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
+let selectedIp=null;
 const PER_PAGE=20,API_TIMEOUT=15000;
 
 function getToken(){try{const u=new URLSearchParams(location.search);const t=u.get('token');if(t){localStorage.setItem('honey_token',t);const clean=location.pathname+location.hash;history.replaceState({},'',clean);return t}}catch(e){}return localStorage.getItem('honey_token')||''}
@@ -206,12 +207,13 @@ async function loadChart(){
 // --- Hash Routing ---
 function routeFromHash(){
   const h=location.hash.slice(1);const parts=h.split('/');
-  selectedPubkey=null;userFilter='publishers';userEventPage=0;
+  selectedPubkey=null;selectedIp=null;userFilter='publishers';userEventPage=0;
   if(parts[0]==='users'&&parts[1]){selectedPubkey=parts[1];currentTab='users'}
   else if(parts[0]==='map'&&parts[1]){selectedPubkey=parts[1];currentTab='map'}
+  else if(parts[0]==='ips'&&parts[1]){selectedIp=decodeURIComponent(parts[1]);currentTab='ip-detail'}
   else if(['connections','events','subscriptions','users','map','ips'].includes(parts[0])){currentTab=parts[0]}
   else{currentTab='connections'}
-  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===currentTab));
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===currentTab||currentTab==='ip-detail'&&x.dataset.tab==='ips'));
   loadTable()
 }
 function navigate(tab,pk){
@@ -224,7 +226,7 @@ function breadcrumb(){
   const parts=[`<a onclick="navigate('connections')">Home</a>`];
   if(currentTab==='users'&&selectedPubkey){parts.push('<span class="sep">/</span>',`<a onclick="navigate('users')">Users</a>`,'<span class="sep">/</span>','<span class="current">'+esc(tr(selectedPubkey,16))+'</span>')}
   else if(currentTab==='map'&&selectedPubkey){parts.push('<span class="sep">/</span>',`<a onclick="navigate('users')">Users</a>`,'<span class="sep">/</span>',`<a onclick="navigate('map','${esc(selectedPubkey)}')">Map</a>`)}
-  else if(currentTab!=='connections'){parts.push('<span class="sep">/</span>','<span class="current">'+currentTab.charAt(0).toUpperCase()+currentTab.slice(1)+'</span>')}
+  else if(currentTab!=='connections'&&currentTab!=='ip-detail'){parts.push('<span class="sep">/</span>','<span class="current">'+(currentTab==='ip-detail'?'IP Detail':currentTab.charAt(0).toUpperCase()+currentTab.slice(1))+'</span>')}
   return'<div class="breadcrumb">'+parts.join('')+'</div>'
 }
 
@@ -232,6 +234,7 @@ function breadcrumb(){
 function showPubkeyDetail(pk){navigate('users',pk)}
 function backToList(){navigate('users')}
 function setUserFilter(f){userFilter=f;selectedPubkey=null;userEventPage=0;loadTable()}
+function showIpDetail(ip){selectedIp=ip;location.hash='ips/'+encodeURIComponent(ip)}
 function showUserMap(pk){navigate('map',pk)}
 
 // --- Map ---
@@ -246,7 +249,7 @@ function renderMapMarkers(gd){
   for(const g of gd){
     if(!g.lat||!g.lon)continue;
     bounds.push([g.lat,g.lon]);
-    const popup=`<div style="font-size:.78rem;line-height:1.4"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><span style="font-family:monospace;color:#58a6ff">${esc(g.ip)}</span><br>Conn: <strong>${g.connections||0}</strong> · Ev: <strong>${g.events||0}</strong><br><span style="color:#8b949e;font-size:.7rem">${esc(g.isp)}${g.proxy?' · 🛡':''}${g.hosting?' · 🖥':''}</span></div>`;
+    const popup=`<div style="font-size:.78rem;line-height:1.4"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><a href="#ips/${encodeURIComponent(g.ip)}" style="font-family:monospace;color:#58a6ff;text-decoration:underline">${esc(g.ip)}</a><br>Conn: <strong>${g.connections||0}</strong> · Ev: <strong>${g.events||0}</strong>${g.pubkeys?` · 👤 ${g.pubkeys}`:''}<br><span style="color:#8b949e;font-size:.7rem">${esc(g.isp)}${g.proxy?' · 🛡':''}${g.hosting?' · 🖥':''}</span><br><a href="#ips/${encodeURIComponent(g.ip)}" style="color:var(--accent2);font-size:.72rem;cursor:pointer">View details →</a></div>`;
     const r=Math.min(4+(g.connections||1)*2,16);
     const c=g.proxy?'#f85149':(g.hosting?'#8b949e':'#f0c040');
     const m=L.circleMarker([g.lat,g.lon],{radius:r,fillColor:c,color:c,weight:1,opacity:.8,fillOpacity:.5}).addTo(map);
@@ -396,10 +399,52 @@ async function loadUserSubs(){
   }catch{panel.innerHTML='<div class="empty">Error loading subs</div>'}
 }
 
+// --- IP Detail (map popup click-through) ---
+async function loadIpDetail(){
+  const area=document.getElementById('content-area');
+  area.innerHTML=breadcrumb()+spin('Loading IP details...');
+  try{
+    const d=await api('/ips/'+encodeURIComponent(selectedIp)+'/detail');
+    const g=d.geo||{};
+    const s=d.stats||{};
+    let html=breadcrumb()+`<div class="back-link" onclick="navigate('map')">← Back to Map</div>`;
+    html+=`<div class="detail-card">
+      <h2>IP <span class="ip" style="font-size:.9rem">${esc(d.ip)}</span></h2>`;
+    if(g.city){html+=`<div style="margin-bottom:8px;font-size:.82rem;color:var(--muted)">📍 ${esc(g.city)}, ${esc(g.country)} ${g.proxy?'· 🛡 Proxy':''}${g.hosting?'· 🖥 Hosting':''}</div>`}
+    html+=`<div class="detail-grid">
+      <div class="detail-item"><span class="key">Connections:</span> <span class="val">${s.connections||0}</span></div>
+      <div class="detail-item"><span class="key">Events:</span> <span class="val">${s.events||0}</span></div>
+      <div class="detail-item"><span class="key">Subscriptions:</span> <span class="val">${s.subscriptions||0}</span></div>
+      <div class="detail-item"><span class="key">Pubkeys:</span> <span class="val">${s.pubkeys||0}</span></div>
+      <div class="detail-item"><span class="key">First seen:</span> <span class="val">${fmtTime(s.first_seen)}</span></div>
+      <div class="detail-item"><span class="key">Last seen:</span> <span class="val">${fmtTime(s.last_seen)}</span></div>
+    </div>`;
+    if(g.isp){html+=`<div style="margin-top:10px;font-size:.78rem;color:var(--muted)"><span class="key">ISP:</span> ${esc(g.isp)}${g.as?` · ${esc(g.as)}`:''}</div>`}
+    html+=`</div>`;
+    // Connections
+    html+=`<h3 class="panel-title">Connections (${d.connections.length})</h3>`;
+    html+='<div class="table-wrap"><table><thead><tr><th>ID</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>';
+    html+=d.connections.length?d.connections.map(r=>`<tr><td>#${r.id}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No connections</td></tr>';
+    html+='</tbody></table></div>';
+    // Events
+    html+=`<h3 class="panel-title">Events (${d.events.length})</h3>`;
+    html+='<div class="table-wrap"><table><thead><tr><th>Kind</th><th>Content</th><th>Pubkey</th><th>Time</th></tr></thead><tbody>';
+    html+=d.events.length?d.events.map(r=>{const eid=storeEv(r);return `<tr class="event-row" onclick="openEv('${eid}')"><td><span class="kind-badge ${kc(r.kind)}">${r.kind}</span></td><td class="event-content">${esc(tr(r.content||'',60))}</td><td>${r.pubkey?`<span class="pk-link" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="duration">${fmtTime(r.logged_at)}</td></tr>`}).join(''):'<tr><td colspan="4" class="empty">No events</td></tr>';
+    html+='</tbody></table></div>';
+    // Subscriptions
+    html+=`<h3 class="panel-title">Subscriptions (${d.subscriptions.length})</h3>`;
+    html+='<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>Pubkey</th><th>Filters</th><th>Time</th></tr></thead><tbody>';
+    html+=d.subscriptions.length?d.subscriptions.map(r=>`<tr><td class="mono">${esc(tr(r.subscription_id,16))}</td><td>${r.pubkey?`<span class="pk-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No subscriptions</td></tr>';
+    html+='</tbody></table></div>';
+    area.innerHTML=html;
+  }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
+}
+
 // --- Table loading ---
 async function loadTable(){
   const area=document.getElementById('content-area');
   if(currentTab==='map'){await loadMap();return}
+  if(currentTab==='ip-detail'&&selectedIp){await loadIpDetail();return}
   if(currentTab==='users'&&selectedPubkey){await loadUserDetail();return}
 
   // Show loading immediately BEFORE any await
