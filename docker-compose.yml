@@ -11,7 +11,8 @@ services:
       - honey-data:/app/data
     restart: unless-stopped
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
 
   honey-dev:
     build: .
@@ -29,7 +30,8 @@ services:
     command: node --watch src/index.js
     restart: "no"
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
@@ -43,7 +45,12 @@ services:
     ports:
       - "9200:9200"
     restart: unless-stopped
-    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
 volumes:
   honey-data:
