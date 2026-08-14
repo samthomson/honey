@@ -47,8 +47,6 @@ services:
       - xpack.ml.enabled=false
     volumes:
       - es-data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
     restart: unless-stopped
     networks:
       - honey-net
