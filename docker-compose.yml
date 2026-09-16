@@ -1,10 +1,10 @@
 services:
   honey:
     build: .
-    ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+    # No published ports: routed by Traefik on Dokploy (domain + dokploy-network).
+    # Publishing host ports breaks multi-instance (host port collisions).
+    # Local dev: use the dev profile (honey-dev) or `docker compose run`.
     environment:
-      - PORT=${PORT:-8080}
       - BACKEND_HOST=${BACKEND_HOST}
       - ADMIN_TOKEN=${ADMIN_TOKEN}
       - ES_URL=http://elasticsearch:9200

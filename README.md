@@ -28,11 +28,12 @@ Message content is **never** stored — only its length.
 cp .env.example .env
 # Edit BACKEND_HOST to point to your relay
 
-# Dev (hot reload):
+# Dev (hot reload, dashboard on http://localhost:8080):
 docker compose --profile dev up
 
-# Prod:
-docker compose up -d
+# Prod: deploy via Dokploy (Traefik routes by domain, no host ports).
+# Bare `docker compose up -d` runs the same image without publishing a port —
+# reach it on the compose network, or use the dev profile locally.
 ```
 
 ## Production (Dokploy)
