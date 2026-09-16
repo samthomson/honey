@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const express = require('express');
 const { WebSocketServer, WebSocket } = require('ws');
 const path = require('path');
@@ -168,10 +169,12 @@ function getClientIp(req) {
 
 // --- HTTP proxy ---
 function proxyHttp(req, res) {
-  const proxyReq = http.request(
+  const isTls = backendUrl.protocol === 'https:';
+  const transport = isTls ? https : http;
+  const proxyReq = transport.request(
     {
       hostname: backendUrl.hostname,
-      port: backendUrl.port,
+      port: backendUrl.port || (isTls ? 443 : 80),
       path: req.url,
       method: req.method,
       headers: { ...req.headers, host: backendUrl.host },
