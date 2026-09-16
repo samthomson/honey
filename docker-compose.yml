@@ -2,8 +2,9 @@ services:
   honey:
     build: .
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     environment:
+      - PORT=${PORT:-8080}
       - BACKEND_HOST=${BACKEND_HOST}
       - ADMIN_TOKEN=${ADMIN_TOKEN}
       - ES_URL=http://elasticsearch:9200
@@ -19,8 +20,9 @@ services:
     build: .
     profiles: ["dev"]
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     environment:
+      - PORT=${PORT:-8080}
       - BACKEND_HOST=${BACKEND_HOST}
       - ADMIN_TOKEN=${ADMIN_TOKEN}
       - ES_URL=http://elasticsearch:9200
