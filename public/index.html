@@ -80,6 +80,9 @@
   .modal .ev-meta{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:12px;font-size:.78rem;padding-bottom:10px;border-bottom:1px solid var(--border)}
   .modal .ev-meta .k{color:var(--muted);display:block;font-size:.68rem;margin-bottom:2px}
   .modal .ev-meta .v{font-family:monospace;display:block;word-break:break-all}
+  .copy-btn{background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:.68rem;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .copy-btn:hover{color:var(--text);border-color:var(--accent2)}
+  .cdn-chip{color:var(--muted);background:var(--card);border:1px dashed var(--border)}
   .breadcrumb{display:flex;gap:4px;align-items:center;font-size:.78rem;margin-bottom:10px;color:var(--muted);flex-wrap:wrap}
   .breadcrumb a{color:var(--accent2);cursor:pointer;text-decoration:none}
   .breadcrumb a:hover{text-decoration:underline}
@@ -125,7 +128,10 @@
 const API='/api';
 let currentTab='connections',selectedPubkey=null,userFilter='publishers';
 let chart=null,map=null,mapMarkers=[];
-let userEventPage=0,geoPollTimer=null,refreshInProgress=false;
+let userEventPage=0,geoPollTimer=null,refreshInProgress=false,viewToken=0;
+// Stale-render guard: navigation while a view's data is in flight must not
+// let the old view clobber the new one when its fetch resolves.
+function staleView(tok){return tok!==viewToken}
 let selectedIp=null;
 let sortKey=null,sortDir='desc';
 let userSearch='';
@@ -291,9 +297,12 @@ function renderMapMarkers(gd){
   if(!map)return;
   mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
   if(!gd||!gd.length)return;
+  // CF WARP / Private Relay egress IPs are rotating shared exits, not real
+  // locations — collapse them into one gray marker instead of 185 fake dots.
+  const cdn=gd.filter(g=>g.cdn&&g.lat&&g.lon);
+  const real=gd.filter(g=>!g.cdn&&g.lat&&g.lon);
   const bounds=[];
-  for(const g of gd){
-    if(!g.lat||!g.lon)continue;
+  for(const g of real){
     bounds.push([g.lat,g.lon]);
     const popup=`<div style="font-size:.78rem;line-height:1.4"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><a href="#ips/${encodeURIComponent(g.ip)}" style="font-family:monospace;color:#58a6ff;text-decoration:underline">${esc(g.ip)}</a><br>Conn: <strong>${g.connections||0}</strong> · Ev: <strong>${g.events||0}</strong>${g.pubkeys?` · 👤 ${g.pubkeys}`:''}<br><span style="color:#8b949e;font-size:.7rem">${esc(g.isp)}${g.proxy?' · 🛡':''}${g.hosting?' · 🖥':''}</span><br><a href="#ips/${encodeURIComponent(g.ip)}" style="color:var(--accent2);font-size:.72rem;cursor:pointer">View details →</a></div>`;
     const r=Math.min(4+(g.connections||1)*2,16);
@@ -301,10 +310,20 @@ function renderMapMarkers(gd){
     const m=L.circleMarker([g.lat,g.lon],{radius:r,fillColor:c,color:c,weight:1,opacity:.8,fillOpacity:.5}).addTo(map);
     m.bindPopup(popup);mapMarkers.push(m)
   }
+  if(cdn.length){
+    const g=cdn[0];
+    const m=L.circleMarker([g.lat,g.lon],{radius:8,fillColor:'#8b949e',color:'#8b949e',weight:1,opacity:.7,fillOpacity:.3,dashArray:'4,4'}).addTo(map);
+    m.bindPopup(`<div style="font-size:.78rem;line-height:1.4"><strong>☁ Cloudflare/VPN egress</strong><br>${cdn.length} rotating exit IP${cdn.length>1?'s':''} (WARP / iCloud Private Relay / Workers).<br><span style="color:#8b949e">Real user locations are not visible behind these.</span></div>`);
+    mapMarkers.push(m);
+    const note=document.getElementById('geo-status');
+    if(note)note.innerHTML+=` · <span style="color:#8b949e">☁ ${cdn.length} CF/VPN egress collapsed</span>`
+  }
   if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:6})
+  else if(cdn.length)map.setView([cdn[0].lat,cdn[0].lon],3)
 }
 
 async function loadMap(){
+  const tok=++viewToken;
   const area=document.getElementById('content-area');
   destroyMap();
   const h=window.innerWidth<768?'350px':'500px';
@@ -315,7 +334,9 @@ async function loadMap(){
     <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;
   await sleep(100);initMap();
   try{
+    if(staleView(tok))return;
     const[status,gd]=await Promise.all([api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):'')),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey)):api('/geo/all')]);
+    if(staleView(tok))return;
     const el=document.getElementById('geo-status');
     if(!gd.length){
       el.innerHTML= status.total>0
@@ -380,20 +401,63 @@ function showEventModal(event){
 }
 const _evStore={};let _evId=0;
 function storeEv(e){const id=++_evId;_evStore[id]=e;return id}
+function copyText(s,btn){
+  const done=()=>{if(btn){btn.textContent='✓';setTimeout(()=>btn.textContent='⧉',900)}};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(s).then(done,done)}
+  else{const t=document.createElement('textarea');t.value=s;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch{}t.remove();done()}
+}
+
+function modalShell(title,metaHtml,bodyHtml){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=(e)=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML=`<div class="modal">
+    <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+    <h3>${title}</h3>
+    <div class="ev-meta">${metaHtml}</div>
+    ${bodyHtml}
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function metaRow(k,v,copyVal){return `<div><span class="k">${k}</span><span class="v">${v}${copyVal?`<button class="copy-btn" onclick="copyText('${esc(copyVal)}',this)">⧉</button>`:''}</span></div>`}
+
+function openSub(id){
+  const s=_evStore[id];if(!s)return;
+  let filters=[];try{filters=JSON.parse(s.filters)}catch{}
+  modalShell('Subscription',metaRow('Sub ID',esc(s.subscription_id),s.subscription_id)
+    +metaRow('Pubkey',s.pubkey?esc(s.pubkey):'—',s.pubkey||null)
+    +metaRow('IP',`<a href="#ips/${encodeURIComponent(s.ip)}" style="color:#58a6ff">${esc(s.ip)}</a>`,s.ip)
+    +metaRow('Time',fmtTime(s.logged_at)),
+    `<div class="panel-title">Filters (${filters.length})<button class="copy-btn" onclick="copyText('${esc(s.filters)}',this)">⧉</button></div><pre>${esc(JSON.stringify(filters,null,2))}</pre>`);
+}
+
+function openConn(id){
+  const c=_evStore[id];if(!c)return;
+  modalShell('Connection #'+c.id,metaRow('IP',`<a href="#ips/${encodeURIComponent(c.ip)}" style="color:#58a6ff">${esc(c.ip)}</a>`,c.ip)
+    +metaRow('Pubkey',c.pubkey?esc(c.pubkey):'— (anonymous)',c.pubkey||null)
+    +metaRow('Connected',fmtTime(c.connected_at))
+    +metaRow('Disconnected',c.disconnected_at?fmtTime(c.disconnected_at):'— (still open)')
+    +metaRow('Duration',fmtDur(c.connected_at,c.disconnected_at)),
+    `<div class="panel-title">User-Agent<button class="copy-btn" onclick="copyText('${esc(c.user_agent||'')}',this)">⧉</button></div><pre>${esc(c.user_agent||'—')}</pre>`);
+}
 function openEv(id){if(_evStore[id])showEventModal(_evStore[id])}
 
 // --- User Detail ---
 async function loadUserDetail(){
+  const tok=++viewToken;
   const area=document.getElementById('content-area');
-  area.innerHTML=spin('Loading user...');
+  if(!area.children.length)area.innerHTML=spin('Loading user...');
+  const _sy=window.scrollY;
   try{
     const d=await api('/pubkeys/'+encodeURIComponent(selectedPubkey));
+    if(staleView(tok))return;
     const npubStr=npub(selectedPubkey);
     area.innerHTML=breadcrumb()+`
       <div class="back-link" onclick="backToList()">← Back to Users</div>
       <div class="detail-card">
         ${d.profile?profileHtml(d.profile):''}
-        <h2>User <span class="mono" style="color:var(--accent2);font-size:.78rem">${esc(tr(npubStr,30))}</span></h2>
+        <h2>User <span class="mono" style="color:var(--accent2);font-size:.78rem">${esc(tr(npubStr,30))}</span><button class="copy-btn" onclick="copyText('${esc(npubStr)}',this)">⧉ npub</button><button class="copy-btn" onclick="copyText('${esc(selectedPubkey)}',this)">⧉ hex</button></h2>
         <div class="detail-grid">
           <div class="detail-item"><span class="key">First:</span> <span class="val">${fmtTime(d.first_seen)}</span></div>
           <div class="detail-item"><span class="key">Last:</span> <span class="val">${fmtTime(d.last_seen)}</span></div>
@@ -403,11 +467,12 @@ async function loadUserDetail(){
           <div class="detail-item"><span class="key">IPs:</span> <span class="val">${d.ips_used}</span></div>
         </div>
         <div style="margin-top:10px"><span class="key" style="font-size:.8rem">Kinds:</span><div class="kind-list" style="margin-top:4px">${d.kinds.map(k=>`<span class="kind-badge ${kc(k.kind)}">${k.kind}: ${k.count}</span>`).join('')}</div></div>
-        <div style="margin-top:10px"><span class="key" style="font-size:.8rem">IPs:</span><div class="ip-list" style="margin-top:4px">${d.ips.map(ip=>`<span>${esc(ip)}</span>`).join('')}</div></div>
+        <div style="margin-top:10px"><span class="key" style="font-size:.8rem">IPs:</span><div class="ip-list" style="margin-top:4px">${(()=>{const real=d.ips.filter(x=>!x.cdn),cdn=d.ips.length-real.length;return real.map(x=>`<span>${esc(x.ip)}</span>`).join('')+(cdn?`<span class="cdn-chip" title="Rotating Cloudflare WARP / iCloud Private Relay egress IPs — real location not visible">☁ ${cdn}× Cloudflare/VPN egress</span>`:'')})()}</div></div>
         <div style="margin-top:12px"><button onclick="showUserMap('${esc(selectedPubkey)}')" style="background:var(--card);border:1px solid var(--accent2);color:var(--accent2);padding:7px 14px;border-radius:var(--radius);cursor:pointer;font-size:.8rem">🌍 View IP Map</button></div>
       </div>
       <h3 class="panel-title">Events</h3><div id="user-events-panel">${spin('Loading events...')}</div>
       <h3 class="panel-title">Subscriptions</h3><div id="user-subs-panel">${spin('Loading subs...')}</div>`;
+    window.scrollTo(0,_sy);
     loadUserEvents();loadUserSubs();
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
@@ -439,7 +504,7 @@ async function loadUserSubs(){
   try{
     const subs=await api('/pubkeys/'+encodeURIComponent(selectedPubkey)+'/subscriptions?limit=50');
     let html='<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>IP</th><th>Filters</th><th>Time</th></tr></thead><tbody>';
-    html+=subs.length?subs.map(r=>`<tr><td class="mono">${esc(tr(r.subscription_id,16))}</td><td class="ip">${esc(r.ip)}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,50))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No subs</td></tr>';
+    html+=subs.length?subs.map(r=>`<tr class="event-row" onclick="openSub('${storeEv(r)}')"><td class="mono" title="${esc(r.subscription_id)}">${esc(tr(r.subscription_id,16))}</td><td class="ip">${esc(r.ip)}</td><td class="filters-cell">${esc(tr(r.filters,50))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No subs</td></tr>';
     html+='</tbody></table></div>';
     panel.innerHTML=html;
   }catch{panel.innerHTML='<div class="empty">Error loading subs</div>'}
@@ -447,8 +512,10 @@ async function loadUserSubs(){
 
 // --- IP Detail (map popup click-through) ---
 async function loadIpDetail(){
+  const tok=++viewToken;
   const area=document.getElementById('content-area');
-  area.innerHTML=breadcrumb()+spin('Loading IP details...');
+  const _sy=window.scrollY;
+  if(!area.children.length)area.innerHTML=breadcrumb()+spin('Loading IP details...');
   try{
     const d=await api('/ips/'+encodeURIComponent(selectedIp)+'/detail');
     const g=d.geo||{};
@@ -470,7 +537,7 @@ async function loadIpDetail(){
     // Connections
     html+=`<h3 class="panel-title">Connections (${d.connections.length})</h3>`;
     html+='<div class="table-wrap"><table><thead><tr><th>ID</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>';
-    html+=d.connections.length?d.connections.map(r=>`<tr><td>#${r.id}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No connections</td></tr>';
+    html+=d.connections.length?d.connections.map(r=>`<tr class="event-row" onclick="openConn('${storeEv(r)}')"><td>#${r.id}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem" title="${esc(r.user_agent||'')}">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No connections</td></tr>';
     html+='</tbody></table></div>';
     // Events
     html+=`<h3 class="panel-title">Events (${d.events.length})</h3>`;
@@ -480,30 +547,36 @@ async function loadIpDetail(){
     // Subscriptions
     html+=`<h3 class="panel-title">Subscriptions (${d.subscriptions.length})</h3>`;
     html+='<div class="table-wrap"><table><thead><tr><th>Sub ID</th><th>Pubkey</th><th>Filters</th><th>Time</th></tr></thead><tbody>';
-    html+=d.subscriptions.length?d.subscriptions.map(r=>`<tr><td class="mono">${esc(tr(r.subscription_id,16))}</td><td>${r.pubkey?`<span class="pk-link" onclick="showPubkeyDetail('${esc(r.pubkey)}')">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No subscriptions</td></tr>';
+    html+=d.subscriptions.length?d.subscriptions.map(r=>`<tr class="event-row" onclick="openSub('${storeEv(r)}')"><td class="mono" title="${esc(r.subscription_id)}">${esc(tr(r.subscription_id,16))}</td><td>${r.pubkey?`<span class="pk-link" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="filters-cell">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No subscriptions</td></tr>';
     html+='</tbody></table></div>';
+    if(staleView(tok))return;
     area.innerHTML=html;
+    window.scrollTo(0,_sy);
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
 
 // --- Table loading ---
 async function loadTable(){
+  const tok=++viewToken;
   const area=document.getElementById('content-area');
   if(currentTab==='map'){await loadMap();return}
   if(currentTab==='ip-detail'&&selectedIp){await loadIpDetail();return}
   if(currentTab==='users'&&selectedPubkey){await loadUserDetail();return}
 
-  // Show loading immediately BEFORE any await
-  area.innerHTML=breadcrumb()+spin('Loading '+currentTab+'...');
+  // Only blank the area on first render — the 30s auto-refresh must not flash
+  // the view or reset table scroll. Preserve scroll across the swap.
+  const _scrollTops=[...area.querySelectorAll('.table-wrap')].map(el=>el.scrollTop);
+  if(!area.children.length)area.innerHTML=breadcrumb()+spin('Loading '+currentTab+'...');
 
   try{
     if(currentTab==='connections'){
       const offset=tablePage*PER_PAGE;
       const rows=await api('/connections?limit='+PER_PAGE+'&offset='+offset);
       let html='<div class="table-wrap"><table><thead><tr><th>ID</th><th>IP</th><th>Pubkey</th><th>UA</th><th>Connected</th><th>Dur</th></tr></thead><tbody>'+(
-        rows.length?rows.map(r=>`<tr><td>#${r.id}</td><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">No connections</td></tr>'
+        rows.length?rows.map(r=>`<tr class="event-row" onclick="openConn('${storeEv(r)}')"><td>#${r.id}</td><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td style="color:var(--muted);font-size:.72rem" title="${esc(r.user_agent||'')}">${esc(tr(r.user_agent,30))}</td><td>${fmtTime(r.connected_at)}</td><td class="duration">${fmtDur(r.connected_at,r.disconnected_at)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">No connections</td></tr>'
       )+'</tbody></table></div>';
       html+=paginationHTML(rows.length);
+      if(staleView(tok))return;
       area.innerHTML=html;
     }else if(currentTab==='events'){
       const offset=tablePage*PER_PAGE;
@@ -518,15 +591,16 @@ async function loadTable(){
         }).join(''):'<tr><td colspan="5" class="empty">No events</td></tr>'
       )+'</tbody></table></div>';
       html+=paginationHTML(rows.length);
+      if(staleView(tok))return;
       area.innerHTML=html;
-      if(kindFilterVisible)renderKindFilter();
     }else if(currentTab==='subscriptions'){
       const offset=tablePage*PER_PAGE;
       const rows=await api('/subscriptions?limit='+PER_PAGE+'&offset='+offset);
       let html='<div class="table-wrap"><table><thead><tr><th>IP</th><th>Pubkey</th><th>Sub ID</th><th>Filters</th><th>Time</th></tr></thead><tbody>'+(
-        rows.length?rows.map(r=>`<tr><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="mono">${esc(tr(r.subscription_id,16))}</td><td class="filters-cell" title="${esc(r.filters)}">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No subs</td></tr>'
+        rows.length?rows.map(r=>`<tr class="event-row" onclick="openSub('${storeEv(r)}')"><td class="ip">${esc(r.ip)}</td><td>${r.pubkey?`<span class="pk-link" data-npub="${r.pubkey?npub(r.pubkey):''}" onclick="event.stopPropagation();showPubkeyDetail('${esc(r.pubkey)}')" title="${esc(r.pubkey)}">${esc(tr(r.pubkey,12))}</span>`:'<span style="color:var(--muted)">—</span>'}</td><td class="mono" title="${esc(r.subscription_id)}">${esc(tr(r.subscription_id,16))}</td><td class="filters-cell">${esc(tr(r.filters,60))}</td><td>${fmtTime(r.logged_at)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No subs</td></tr>'
       )+'</tbody></table></div>';
       html+=paginationHTML(rows.length);
+      if(staleView(tok))return;
       area.innerHTML=html;
     }else if(currentTab==='users'){
       const offset=tablePage*PER_PAGE;
@@ -552,6 +626,7 @@ async function loadTable(){
         )+'</tbody></table></div>';
       }
       html+=paginationHTML(rows.length);
+      if(staleView(tok))return;
       area.innerHTML=html;
     }else if(currentTab==='ips'){
       const offset=tablePage*PER_PAGE;
@@ -561,18 +636,28 @@ async function loadTable(){
         sortedI.length?sortedI.map((r,i)=>`<tr><td>${offset+i+1}</td><td class="ip">${esc(r.ip)}</td><td>${r.connections}</td><td>${r.events}</td><td>${r.subscriptions}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No data</td></tr>'
       )+'</tbody></table></div>';
       html+=paginationHTML(rows.length);
+      if(staleView(tok))return;
       area.innerHTML=html;
     }
+    [...area.querySelectorAll('.table-wrap')].forEach((el,i)=>{if(_scrollTops[i]!==undefined)el.scrollTop=_scrollTops[i]});
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
 
-// --- Refresh ---
 async function refresh(){
   if(refreshInProgress)return;
   refreshInProgress=true;
   try{
     if(currentTab==='map'){await loadMap()}
-    else{await Promise.allSettled([loadStats(),loadChart(),loadTable()])}
+    else{
+      // Don't yank tables out from under the user mid-interaction:
+      // skip the table reload while a modal is open or focus is inside the
+      // content area (e.g. typing in the search box). Stats/chart still update.
+      const area=document.getElementById('content-area');
+      const busy=document.querySelector('.modal-overlay')||!!(area&&area.contains(document.activeElement));
+      const tasks=[loadStats(),loadChart()];
+      if(!busy)tasks.push(loadTable());
+      await Promise.allSettled(tasks);
+    }
     document.getElementById('refresh-info').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
     document.getElementById('refresh-info').textContent='⚠️ '+(e.message||'Error');

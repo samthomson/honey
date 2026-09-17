@@ -1,4 +1,5 @@
 const { getClient, INDICES } = require('./es');
+const { isCloudflareIp } = require('./cf');
 
 // All the heavy dashboard queries rewritten for Elasticsearch
 
@@ -195,39 +196,15 @@ async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
   const es = getClient();
 
   if (filter === 'readers') {
-    // IPs that have subscriptions but no pubkey in connections
-    const result = await es.search({
+    // IPs with connections but no pubkey, newest activity first.
+    // Terms agg dedupes by IP; offset applied by slicing (aggs have no `from`).
+    const readerConns = await es.search({
       index: INDICES.connections, size: 0,
       body: {
         query: { bool: { must_not: { exists: { field: 'pubkey' } } } },
         aggs: {
           by_ip: {
-            terms: { field: 'ip', size: limit, order: { last_seen: 'desc' } },
-            aggs: {
-              last_seen: { max: { field: 'connected_at' } },
-              first_seen: { min: { field: 'connected_at' } },
-              sub_count: {
-                filter: { exists: { field: 'subscription_id' } },
-              },
-            },
-          },
-        },
-      },
-    });
-    // This approach needs a join with subscriptions — let's do it differently
-    // Get reader IPs from connections (no pubkey), then count their subs
-    const readerConns = await es.search({
-      index: INDICES.connections,
-      size: limit, from: offset,
-      body: {
-        query: { bool: { must_not: { exists: { field: 'pubkey' } } } },
-        sort: [{ connected_at: { order: 'desc' } }],
-        aggs: {
-          by_ip: {
-            composite: {
-              size: limit,
-              sources: [{ ip: { terms: { field: 'ip' } } }],
-            },
+            terms: { field: 'ip', size: limit + offset, order: { last_seen: 'desc' } },
             aggs: {
               connections: { value_count: { field: 'ip' } },
               first_seen: { min: { field: 'connected_at' } },
@@ -238,16 +215,16 @@ async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
       },
     });
 
-    const buckets = readerConns.aggregations.by_ip.buckets;
+    const buckets = readerConns.aggregations.by_ip.buckets.slice(offset, offset + limit);
     if (!buckets.length) return [];
 
-    // Get sub counts for these IPs
+    // Sub counts for these IPs
     const ipList = buckets.map(b => b.key.ip);
     const subAgg = await es.search({
       index: INDICES.subscriptions, size: 0,
       body: {
         query: { terms: { ip: ipList } },
-        aggs: { by_ip: { terms: { field: 'ip', size: limit } } },
+        aggs: { by_ip: { terms: { field: 'ip', size: ipList.length } } },
       },
     });
     const subMap = Object.fromEntries(subAgg.aggregations.by_ip.buckets.map(b => [b.key, b.doc_count]));
@@ -282,7 +259,7 @@ async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
       query,
       aggs: {
         by_pubkey: {
-          terms: { field: 'pubkey', size: limit, order: esOrder },
+          terms: { field: 'pubkey', size: limit + offset, order: esOrder },
           aggs: {
             event_count: { value_count: { field: 'pubkey' } },
             event_ips: { cardinality: { field: 'ip' } },
@@ -294,7 +271,8 @@ async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
     },
   });
 
-  const buckets = result.aggregations.by_pubkey.buckets;
+  // Aggregations have no `from` — fetch limit+offset buckets, slice the page
+  const buckets = result.aggregations.by_pubkey.buckets.slice(offset, offset + limit);
   if (!buckets.length) return [];
 
   // Enrich with connection counts and sub counts
@@ -304,21 +282,20 @@ async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
       index: INDICES.connections, size: 0,
       body: {
         query: { terms: { pubkey: pubkeyList } },
-        aggs: { by_pubkey: { terms: { field: 'pubkey', size: limit } } },
+        aggs: { by_pubkey: { terms: { field: 'pubkey', size: pubkeyList.length } } },
       },
     }),
     es.search({
       index: INDICES.subscriptions, size: 0,
       body: {
         query: { terms: { pubkey: pubkeyList } },
-        aggs: { by_pubkey: { terms: { field: 'pubkey', size: limit } } },
+        aggs: { by_pubkey: { terms: { field: 'pubkey', size: pubkeyList.length } } },
       },
     }),
   ]);
 
   const connMap = Object.fromEntries(connAgg.aggregations.by_pubkey.buckets.map(b => [b.key, b.doc_count]));
   const subMap = Object.fromEntries(subAgg.aggregations.by_pubkey.buckets.map(b => [b.key, b.doc_count]));
-
   return buckets.map(b => ({
     pubkey: b.key,
     event_count: b.doc_count,
@@ -387,7 +364,7 @@ async function getPubkeyDetail(pubkey) {
     connections: connAgg.count,
     subscriptions: subAgg.count,
     ips_used: allIps.length,
-    ips: allIps,
+    ips: allIps.map(ip => ({ ip, cdn: isCloudflareIp(ip) })),
     kinds: kindsAgg.aggregations.kinds.buckets.map(b => ({ kind: b.key, count: b.doc_count })),
   };
 }
@@ -482,6 +459,7 @@ async function getAllGeo() {
     const c = connMap[g.ip];
     return {
       ...g,
+      cdn: isCloudflareIp(g.ip),
       lat: g.location?.lat,
       lon: g.location?.lon,
       connections: c?.doc_count || 0,
@@ -536,6 +514,7 @@ async function getGeoForPubkey(pubkey) {
     const g = h._source;
     return {
       ...g,
+      cdn: isCloudflareIp(g.ip),
       lat: g.location?.lat,
       lon: g.location?.lon,
       connections: connMap[g.ip] || 0,
