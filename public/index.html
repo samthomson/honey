@@ -42,6 +42,8 @@
   .badge-active{background:#2ea04322;color:#2ea043;padding:2px 6px;border-radius:10px;font-size:.7rem}
   .empty{text-align:center;color:var(--muted);padding:30px}
   #refresh-info{font-size:.7rem;color:var(--muted)}
+  #new-data-pill{display:none;background:var(--accent2);border:none;color:#fff;border-radius:12px;padding:3px 12px;font-size:.72rem;cursor:pointer;font-weight:600}
+  #new-data-pill:hover{filter:brightness(1.15)}
   .filters-cell{font-family:monospace;font-size:.7rem;max-width:200px;overflow:hidden;text-overflow:ellipsis}
   .duration{color:var(--muted);font-size:.72rem}
   .loading{text-align:center;padding:40px 20px;color:var(--muted);font-size:.85rem}
@@ -106,6 +108,7 @@
 <header>
   <h1>🍯 <span>Honey</span></h1>
   <div class="header-right">
+    <button id="new-data-pill" onclick="loadNewData()">↑ New data</button>
     <span id="refresh-info">Loading...</span>
     <input type="password" id="token-input" placeholder="Token" />
   </div>
@@ -129,9 +132,11 @@ const API='/api';
 let currentTab='connections',selectedPubkey=null,userFilter='publishers';
 let chart=null,map=null,mapMarkers=[];
 let userEventPage=0,geoPollTimer=null,refreshInProgress=false,viewToken=0;
+let dataVersion=0,renderedDataVersion=null;
 // Stale-render guard: navigation while a view's data is in flight must not
 // let the old view clobber the new one when its fetch resolves.
 function staleView(tok){return tok!==viewToken}
+function loadNewData(){const p=document.getElementById('new-data-pill');if(p)p.style.display='none';loadTable()}
 let selectedIp=null;
 let sortKey=null,sortDir='desc';
 let userSearch='';
@@ -192,6 +197,7 @@ function profileHtml(p){
 async function loadStats(){
   try{
     const[s,rs]=await Promise.all([api('/stats'),api('/reader-stats')]);
+    dataVersion = s.totalConnections + s.totalEvents;
     document.getElementById('stats').innerHTML=`
       <div class="stat-card"><div class="value">${s.totalConnections.toLocaleString()}</div><div class="label">Connections</div></div>
       <div class="stat-card"><div class="value">${s.uniqueIps.toLocaleString()}</div><div class="label">Unique IPs</div></div>
@@ -348,6 +354,7 @@ async function loadMap(){
       renderMapMarkers(gd);
       if(status.uncached>0)geoPollTimer=setTimeout(pollGeo,10000);
     }
+    renderedDataVersion=dataVersion;
   }catch(e){document.getElementById('geo-status').innerHTML='<span style="color:var(--danger)">Error: '+esc(e.message)+'</span>'}
 }
 
@@ -462,8 +469,6 @@ async function loadUserDetail(){
           <div class="detail-item"><span class="key">First:</span> <span class="val">${fmtTime(d.first_seen)}</span></div>
           <div class="detail-item"><span class="key">Last:</span> <span class="val">${fmtTime(d.last_seen)}</span></div>
           <div class="detail-item"><span class="key">Events:</span> <span class="val">${d.event_count}</span></div>
-          <div class="detail-item"><span class="key">Subs:</span> <span class="val">${d.subscriptions}</span></div>
-          <div class="detail-item"><span class="key">Conns:</span> <span class="val">${d.connections}</span></div>
           <div class="detail-item"><span class="key">IPs:</span> <span class="val">${d.ips_used}</span></div>
         </div>
         <div style="margin-top:10px"><span class="key" style="font-size:.8rem">Kinds:</span><div class="kind-list" style="margin-top:4px">${d.kinds.map(k=>`<span class="kind-badge ${kc(k.kind)}">${k.kind}: ${k.count}</span>`).join('')}</div></div>
@@ -473,6 +478,7 @@ async function loadUserDetail(){
       <h3 class="panel-title">Events</h3><div id="user-events-panel">${spin('Loading events...')}</div>
       <h3 class="panel-title">Subscriptions</h3><div id="user-subs-panel">${spin('Loading subs...')}</div>`;
     window.scrollTo(0,_sy);
+    renderedDataVersion=dataVersion;
     loadUserEvents();loadUserSubs();
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
@@ -552,6 +558,7 @@ async function loadIpDetail(){
     if(staleView(tok))return;
     area.innerHTML=html;
     window.scrollTo(0,_sy);
+    renderedDataVersion=dataVersion;
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
 
@@ -640,23 +647,21 @@ async function loadTable(){
       area.innerHTML=html;
     }
     [...area.querySelectorAll('.table-wrap')].forEach((el,i)=>{if(_scrollTops[i]!==undefined)el.scrollTop=_scrollTops[i]});
+    renderedDataVersion=dataVersion;
   }catch(e){area.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
 }
 
+// Auto-refresh only updates the header stats/chart and watches for newer data.
+// Views reload when the user navigates, paginates, or clicks the pill — never
+// silently underneath them.
 async function refresh(){
   if(refreshInProgress)return;
   refreshInProgress=true;
   try{
-    if(currentTab==='map'){await loadMap()}
-    else{
-      // Don't yank tables out from under the user mid-interaction:
-      // skip the table reload while a modal is open or focus is inside the
-      // content area (e.g. typing in the search box). Stats/chart still update.
-      const area=document.getElementById('content-area');
-      const busy=document.querySelector('.modal-overlay')||!!(area&&area.contains(document.activeElement));
-      const tasks=[loadStats(),loadChart()];
-      if(!busy)tasks.push(loadTable());
-      await Promise.allSettled(tasks);
+    await Promise.allSettled([loadStats(),loadChart()]);
+    if(renderedDataVersion!==null&&dataVersion>renderedDataVersion){
+      const p=document.getElementById('new-data-pill');
+      if(p)p.style.display='inline-block';
     }
     document.getElementById('refresh-info').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
@@ -673,8 +678,9 @@ const ti=document.getElementById('token-input');
 ti.addEventListener('change',()=>{setToken(ti.value);refresh()});
 if(!getToken())ti.style.display='block';
 
-// Initial route
-routeFromHash();
+// Boot: load stats first so the first render captures the current data
+// version (no spurious pill), then route and start the refresh cycle.
+refresh().then(()=>routeFromHash());
 setInterval(refresh,30000);
 </script>
 </body>
