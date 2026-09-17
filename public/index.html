@@ -395,7 +395,7 @@ function showEventModal(event){
     <h3>Event <span class="mono" style="color:var(--accent2);font-size:.78rem">${esc(tr(event.event_id,20))}</span></h3>
     <div class="ev-meta">
       <div><span class="k">Kind</span><span class="v"><span class="kind-badge ${kc(event.kind)}">${event.kind}</span></span></div>
-      <div><span class="k">Pubkey</span><span class="v">${event.pubkey?`<span class="pk-link" onclick="showPubkeyDetail('${esc(event.pubkey)}');this.closest('.modal-overlay').remove()">${esc(tr(npubStr,30))}</span>`:'—'}</span></div>
+      <div><span class="k">Pubkey</span><span class="v">${event.pubkey?`<span class="pk-link" onclick="showPubkeyDetail('${esc(event.pubkey)}');this.closest('.modal-overlay').remove()">${esc(tr(npubStr,30))}</span><button class="copy-btn" onclick="copyText('${esc(event.pubkey)}',this)">⧉ hex</button><button class="copy-btn" onclick="copyText('${esc(npubStr)}',this)">⧉ npub</button><a href="https://snort.social/p/${esc(npubStr)}" target="_blank" rel="noopener noreferrer" style="font-size:.7rem;color:#58a6ff;text-decoration:none;margin-left:6px">↗ snort</a>`:'—'}</span></div>
       <div><span class="k">IP</span><span class="v" style="color:var(--accent2)">${esc(event.ip)}</span></div>
       <div><span class="k">Created</span><span class="v">${fmtTime(event.created_at)}</span></div>
       <div><span class="k">Logged</span><span class="v">${fmtTime(event.logged_at)}</span></div>
@@ -429,6 +429,30 @@ function modalShell(title,metaHtml,bodyHtml){
 
 function metaRow(k,v,copyVal){return `<div><span class="k">${k}</span><span class="v">${v}${copyVal?`<button class="copy-btn" onclick="copyText('${esc(copyVal)}',this)">⧉</button>`:''}</span></div>`}
 
+function detectedPubkeysHtml(filters){
+  // Pubkeys appear in filter authors arrays and #p tag filters. Event ids are
+  // also 64-hex, so only extract from those two fields.
+  const hexRe=/^[0-9a-fA-F]{64}$/;
+  const keys=new Set();
+  const arr=Array.isArray(filters)?filters:[filters];
+  for(const f of arr){
+    if(!f||typeof f!=='object')continue;
+    for(const a of (f.authors||[]))if(hexRe.test(String(a)))keys.add(String(a).toLowerCase());
+    for(const p of (f['#p']||[]))if(hexRe.test(String(p)))keys.add(String(p).toLowerCase());
+  }
+  if(!keys.size)return '';
+  return `<div class="panel-title">Detected pubkeys (${keys.size})</div>`+[...keys].map(k=>{
+    const n=npub(k);
+    return `<div style="display:flex;align-items:center;gap:6px;margin:4px 0;flex-wrap:wrap">
+      <span class="pk-link" title="${k}" onclick="this.closest('.modal-overlay').remove();showPubkeyDetail('${k}')" style="font-size:.74rem">${esc(tr(n,26))}</span>
+      <button class="copy-btn" onclick="copyText('${k}',this)">⧉ hex</button>
+      <button class="copy-btn" onclick="copyText('${n}',this)">⧉ npub</button>
+      <a href="https://snort.social/p/${n}" target="_blank" rel="noopener noreferrer" style="font-size:.7rem;color:#58a6ff;text-decoration:none">↗ snort</a>
+      <a href="https://nostrudel.ninja/#/u/${n}" target="_blank" rel="noopener noreferrer" style="font-size:.7rem;color:#58a6ff;text-decoration:none">↗ nostrudel</a>
+    </div>`;
+  }).join('');
+}
+
 function openSub(id){
   const s=_evStore[id];if(!s)return;
   let filters=[];try{filters=JSON.parse(s.filters)}catch{}
@@ -436,7 +460,8 @@ function openSub(id){
     +metaRow('Pubkey',s.pubkey?esc(s.pubkey):'—',s.pubkey||null)
     +metaRow('IP',`<a href="#ips/${encodeURIComponent(s.ip)}" style="color:#58a6ff">${esc(s.ip)}</a>`,s.ip)
     +metaRow('Time',fmtTime(s.logged_at)),
-    `<div class="panel-title">Filters (${filters.length})<button class="copy-btn" onclick="copyText('${esc(s.filters)}',this)">⧉</button></div><pre>${esc(JSON.stringify(filters,null,2))}</pre>`);
+    detectedPubkeysHtml(filters)
+    +`<div class="panel-title">Filters (${filters.length})<button class="copy-btn" onclick="copyText('${esc(s.filters)}',this)">⧉</button></div><pre>${esc(JSON.stringify(filters,null,2))}</pre>`);
 }
 
 function openConn(id){
