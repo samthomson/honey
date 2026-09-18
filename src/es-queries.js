@@ -428,63 +428,106 @@ async function getPubkeyIps(pubkey) {
   }));
 }
 
-// The global map is the heaviest query (10k geo docs + two large bucketed
-// aggs) and its inputs change only at geocode-worker cadence — cache it.
-let _allGeoCache = null;
-let _allGeoCacheAt = 0;
-const ALL_GEO_TTL_MS = 30000;
-
-async function getAllGeo() {
-  if (_allGeoCache && Date.now() - _allGeoCacheAt < ALL_GEO_TTL_MS) return _allGeoCache;
+// Viewport-driven map query. The geo index carries denormalized per-IP
+// activity (connections/events/last_seen) and the cdn flag, so this is a
+// single-index query with no joins and no point-count cap on totals.
+//
+// opts: { bbox: [top, left, bottom, right], zoom, q, since, until, type,
+//         includeCdn, limit }
+async function getMapData(opts) {
   const es = getClient();
-  // Get all geo points, enrich with connection/event counts
-  const geoResult = await es.search({
-    index: INDICES.geo, size: 10000,
+  const { bbox, zoom } = opts;
+  const filters = [{ exists: { field: 'location' } }];
+
+  if (bbox && bbox.length === 4) {
+    filters.push({ geo_bounding_box: { location: { top_left: { lat: bbox[0], lon: bbox[1] }, bottom_right: { lat: bbox[2], lon: bbox[3] } } } });
+  }
+  if (!opts.includeCdn) {
+    // CF egress has no real location. Docs from before the backfill have no
+    // cdn field at all — treat missing as non-cdn so nothing hides.
+    filters.push({ bool: { should: [{ term: { cdn: false } }, { bool: { must_not: { exists: { field: 'cdn' } } } }] } });
+  }
+  if (opts.since || opts.until) {
+    const range = {};
+    if (opts.since) range.gte = opts.since;
+    if (opts.until) range.lte = opts.until;
+    filters.push({ range: { last_seen: range } });
+  }
+  if (opts.type === 'hosting') filters.push({ term: { hosting: true } });
+  else if (opts.type === 'proxy') filters.push({ term: { proxy: true } });
+  else if (opts.type === 'real') filters.push({ bool: { must_not: [{ term: { hosting: true } }, { term: { proxy: true } }] } });
+
+  if (opts.q) {
+    const q = String(opts.q).trim();
+    const should = [
+      { wildcard: { ip: { value: `*${q}*` } } },
+      { wildcard: { city: { value: `*${q}*`, case_insensitive: true } } },
+      { wildcard: { country: { value: `*${q}*`, case_insensitive: true } } },
+      { match: { isp: q } },
+      { match: { org: q } },
+      { wildcard: { as: { value: `*${q}*`, case_insensitive: true } } },
+    ];
+    filters.push({ bool: { should, minimum_should_match: 1 } });
+  }
+
+  const query = { bool: { filter: filters } };
+  const limit = Math.min(opts.limit || 500, 1000);
+  // Cluster below zoom 8, individual points at 8+. Geohash precision tracks
+  // zoom so cells stay roughly screen-sized.
+  const cluster = zoom === undefined || zoom < 8;
+  const precision = zoom <= 3 ? 2 : zoom <= 5 ? 3 : zoom <= 7 ? 4 : 5;
+
+  if (cluster) {
+    const r = await es.search({
+      index: INDICES.geo, size: 0,
+      body: {
+        query,
+        aggs: {
+          view: {
+            geohash_grid: { field: 'location', precision: precision },
+            aggs: {
+              conns: { sum: { field: 'connections' } },
+              events: { sum: { field: 'events' } },
+              center: { geo_centroid: { field: 'location' } },
+              top_city: { terms: { field: 'city', size: 1 } },
+            },
+          },
+        },
+      },
+    });
+    const agg = r.aggregations.view;
+    const totalsConns = agg.buckets.reduce((s, b) => s + (b.conns?.value || 0), 0);
+    const totalsEvents = agg.buckets.reduce((s, b) => s + (b.events?.value || 0), 0);
+    return {
+      mode: 'clusters',
+      totals: { ips: r.hits.total.value, connections: totalsConns, events: totalsEvents },
+      clusters: agg.buckets.map(b => ({
+        lat: b.center.location.lat,
+        lon: b.center.location.lon,
+        ips: b.doc_count,
+        connections: b.conns?.value || 0,
+        events: b.events?.value || 0,
+        city: b.top_city.buckets.length ? b.top_city.buckets[0].key : null,
+      })),
+    };
+  }
+
+  const r = await es.search({
+    index: INDICES.geo, size: limit,
     body: {
-      query: { exists: { field: 'location' } },
-      _source: ['ip', 'city', 'country_code', 'isp', 'proxy', 'hosting', 'location'],
+      query,
+      sort: [{ connections: { order: 'desc' } }],
+      _source: ['ip', 'city', 'country_code', 'isp', 'proxy', 'hosting', 'cdn', 'location', 'connections', 'events', 'last_seen'],
     },
   });
-
-  if (!geoResult.hits.hits.length) return [];
-
-  const ips = geoResult.hits.hits.map(h => h._source.ip);
-
-  // Batch aggregation for connection and event counts per IP
-  const [connAgg, eventAgg, pubkeyAgg] = await Promise.all([
-    es.search({
-      index: INDICES.connections, size: 0,
-      body: {
-        query: { terms: { ip: ips } },
-        aggs: { by_ip: { terms: { field: 'ip', size: ips.length }, aggs: { pubkeys: { cardinality: { field: 'pubkey' } } } } },
-      },
+  return {
+    mode: 'points',
+    totals: { ips: r.hits.total.value, truncated: r.hits.total.value > r.hits.hits.length, returned: r.hits.hits.length },
+    points: r.hits.hits.map(h => {
+      const g = h._source;
+      return { ...g, lat: g.location?.lat, lon: g.location?.lon };
     }),
-    es.search({
-      index: INDICES.events, size: 0,
-      body: { query: { terms: { ip: ips } }, aggs: { by_ip: { terms: { field: 'ip', size: ips.length } } } },
-    }),
-    null,
-  ]);
-
-  const connMap = Object.fromEntries(connAgg.aggregations.by_ip.buckets.map(b => [b.key, b]));
-  const eventMap = Object.fromEntries(eventAgg.aggregations.by_ip.buckets.map(b => [b.key, b.doc_count]));
-
-  const _result = geoResult.hits.hits.map(h => {
-    const g = h._source;
-    const c = connMap[g.ip];
-    return {
-      ...g,
-      cdn: isCloudflareIp(g.ip),
-      lat: g.location?.lat,
-      lon: g.location?.lon,
-      connections: c?.doc_count || 0,
-      events: eventMap[g.ip] || 0,
-      pubkeys: c?.pubkeys?.value || 0,
-    };
-  }).sort((a, b) => b.connections - a.connections);
-  _allGeoCache = _result;
-  _allGeoCacheAt = Date.now();
-  return _result;
+  };
 }
 
 async function getGeoForPubkey(pubkey) {
@@ -514,29 +557,17 @@ async function getGeoForPubkey(pubkey) {
     body: { query: { terms: { ip: ips } } },
   });
 
-  const [connAgg, eventAgg] = await Promise.all([
-    es.search({
-      index: INDICES.connections, size: 0,
-      body: { query: { bool: { must: [{ term: { pubkey } }, { terms: { ip: ips } }] } }, aggs: { by_ip: { terms: { field: 'ip', size: ips.length } } } },
-    }),
-    es.search({
-      index: INDICES.events, size: 0,
-      body: { query: { bool: { must: [{ term: { pubkey } }, { terms: { ip: ips } }] } }, aggs: { by_ip: { terms: { field: 'ip', size: ips.length } } } },
-    }),
-  ]);
-
-  const connMap = Object.fromEntries(connAgg.aggregations.by_ip.buckets.map(b => [b.key, b.doc_count]));
-  const eventMap = Object.fromEntries(eventAgg.aggregations.by_ip.buckets.map(b => [b.key, b.doc_count]));
-
+  // Counts and cdn flag are denormalized into the geo docs at sync time —
+  // the per-pubkey view of them is authoritative enough and needs no joins.
   return geoResult.hits.hits.map(h => {
     const g = h._source;
     return {
       ...g,
-      cdn: isCloudflareIp(g.ip),
+      cdn: g.cdn !== undefined ? g.cdn : isCloudflareIp(g.ip),
       lat: g.location?.lat,
       lon: g.location?.lon,
-      connections: connMap[g.ip] || 0,
-      events: eventMap[g.ip] || 0,
+      connections: g.connections || 0,
+      events: g.events || 0,
     };
   }).sort((a, b) => b.connections - a.connections);
 }
@@ -671,6 +702,6 @@ module.exports = {
   getStats, getReaderStats, getTopIps, getActivity,
   getConnections, getEvents, getEventKinds, getSubscriptions,
   getPubkeys, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps,
-  getAllGeo, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey,
+  getMapData, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey,
   getIpDetail,
 };

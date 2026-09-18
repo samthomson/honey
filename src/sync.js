@@ -1,5 +1,5 @@
 const { getClient, INDICES } = require('./es');
-
+const { isCloudflareIp } = require('./cf');
 // Watermarks: track last synced row ID per table
 // Stored in a simple JSON file so it survives restarts
 const fs = require('fs');
@@ -164,8 +164,12 @@ async function syncGeo(es, wm) {
     const rows = getNewGeoRows(wm.geo || 0);
     if (!rows.length) break;
 
+    // Denormalize per-IP activity + CDN flag into each geo doc so map
+    // queries never need cross-index joins.
+    const enrich = db.getGeoEnrichment(rows.map(r => r.ip));
     const body = [];
     for (const r of rows) {
+      const e = enrich.get(r.ip) || { connections: 0, events: 0, last_seen: null };
       body.push({ index: { _index: INDICES.geo, _id: r.ip } });
       body.push({
         ip: r.ip,
@@ -179,6 +183,10 @@ async function syncGeo(es, wm) {
         as: r.as,
         proxy: !!r.proxy,
         hosting: !!r.hosting,
+        cdn: isCloudflareIp(r.ip),
+        connections: e.connections,
+        events: e.events,
+        last_seen: e.last_seen,
         geocoded_at: r.geocoded_at,
       });
     }
@@ -238,6 +246,21 @@ function startSyncWorker() {
         if (connCount.count === 0 && eventCount.count === 0) {
           console.log('[sync] ES indices empty, running full backfill...');
           await fullReindex();
+        } else {
+          // Enrichment schema upgrade: geo docs written before counts/cdn
+          // were denormalized need one re-push. Reset the geo watermark so
+          // the next sync re-indexes every geo row (idempotent, _id=ip).
+          const stale = await es.search({
+            index: INDICES.geo, size: 1,
+            body: { query: { bool: { must_not: { exists: { field: 'connections' } } } } },
+          }).catch(() => null);
+          if (stale && stale.hits && stale.hits.hits && stale.hits.hits.length) {
+            console.log('[sync] Geo docs lack enrichment fields — backfilling...');
+            const wm = loadWatermarks();
+            wm.geo = 0;
+            saveWatermarks(wm);
+            await runSync();
+          }
         }
       }
       timer = setInterval(runSync, SYNC_INTERVAL_MS);

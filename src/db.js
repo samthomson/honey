@@ -419,6 +419,19 @@ function getAllGeo() {
   `).all();
 }
 
+// Per-IP activity stats used to denormalize into ES geo docs at sync time,
+// so map queries never need cross-index joins.
+function getGeoEnrichment(ips) {
+  if (!ips.length) return new Map();
+  const ph = ips.map(() => '?').join(',');
+  const conn = db.prepare(`SELECT ip, COUNT(*) c, MAX(connected_at) ls FROM connections WHERE ip IN (${ph}) GROUP BY ip`).all(...ips);
+  const ev = db.prepare(`SELECT ip, COUNT(*) c FROM published_events WHERE ip IN (${ph}) GROUP BY ip`).all(...ips);
+  const m = new Map();
+  for (const r of conn) m.set(r.ip, { connections: r.c, events: 0, last_seen: r.ls });
+  for (const r of ev) { const e = m.get(r.ip) || { connections: 0, events: 0, last_seen: null }; e.events = r.c; m.set(r.ip, e); }
+  return m;
+}
+
 function getGeoForPubkey(pubkey) {
   return db.prepare(`
     SELECT g.*,
@@ -655,7 +668,7 @@ module.exports = {
   getStats, getConnections, getEvents, getSubscriptions, getTopIps, getActivity,
   getPubkeys, getReaderStats, getPubkeyDetail, getPubkeyEvents, getPubkeySubscriptions, getPubkeyIps, getIpDetail,
   // Geo
-  geocodeIps, getGeoForIp, getAllGeo, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey, getAllUniqueIps, getUniqueIpsForPubkey,
+  geocodeIps, getGeoForIp, getAllGeo, getGeoEnrichment, getGeoForPubkey, getGeoStats, getGeoStatsForPubkey, getAllUniqueIps, getUniqueIpsForPubkey,
   // Profiles
   cacheProfile, getProfile, getProfiles, getStaleProfiles, fetchProfilesFromRelay,
   getAllPubkeys,

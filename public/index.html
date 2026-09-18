@@ -299,37 +299,96 @@ function applyKindFilter(){
 function destroyMap(){if(map){map.remove();map=null;mapMarkers=[]}if(geoPollTimer){clearTimeout(geoPollTimer);geoPollTimer=null}}
 function initMap(){if(map)return;map=L.map('map-container',{worldCopyJump:true}).setView([20,0],2);L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OSM © CARTO',maxZoom:18}).addTo(map)}
 
-function renderMapMarkers(gd){
+let mapFilters={q:'',days:0,type:'',cdn:false},mapFetchTimer=null;
+function setMapFilter(k,v){mapFilters[k]=v;fetchMapViewport()}
+
+function pointPopup(g){
+  return `<div style="font-size:.78rem;line-height:1.4"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><a href="#ips/${encodeURIComponent(g.ip)}" style="font-family:monospace;color:#58a6ff;text-decoration:underline">${esc(g.ip)}</a><br>Conn: <strong>${g.connections||0}</strong> · Ev: <strong>${g.events||0}</strong><br><span style="color:#8b949e;font-size:.7rem">${esc(g.isp)}${g.proxy?' · 🛡':''}${g.hosting?' · 🖥':''}${g.last_seen?` · last ${fmtTime(g.last_seen)}`:''}</span><br><a href="#ips/${encodeURIComponent(g.ip)}" style="color:var(--accent2);font-size:.72rem;cursor:pointer">View details →</a></div>`;
+}
+
+function renderMapResult(d){
   if(!map)return;
   mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
-  if(!gd||!gd.length)return;
-  // CF WARP / Private Relay egress IPs are rotating shared exits with no real
-  // location — never plotted. The notice above the map explains them instead.
+  const totals=document.getElementById('map-totals');
+  if(!d||((d.mode==='clusters'?!d.clusters.length:!d.points.length))){
+    if(totals)totals.innerHTML='<span style="color:var(--muted)">No IPs match in this view.</span>';
+    return;
+  }
+  if(d.mode==='clusters'){
+    for(const c of d.clusters){
+      const r=Math.min(6+Math.sqrt(c.ips)*2.2,26);
+      const m=L.circleMarker([c.lat,c.lon],{radius:r,fillColor:'#f0c040',color:'#f0c040',weight:1,opacity:.7,fillOpacity:.35}).addTo(map);
+      m.bindTooltip(`<strong>${c.ips.toLocaleString()} IPs</strong> · ${c.connections.toLocaleString()} conns${c.city?`<br>near ${esc(c.city)}`:''}<br><span style="color:#8b949e">zoom in to split</span>`,{direction:'top'});
+      m.on('click',()=>map.setView([c.lat,c.lon],Math.max(map.getZoom()+2,5)));
+      mapMarkers.push(m);
+    }
+    if(totals)totals.innerHTML=`<strong>${d.totals.ips.toLocaleString()} IPs</strong> · ${d.totals.connections.toLocaleString()} connections in view · exact, clustered`;
+  }else{
+    for(const g of d.points){
+      const r=Math.min(4+(g.connections||1)*2,16);
+      const col=g.proxy?'#f85149':(g.hosting?'#8b949e':'#f0c040');
+      const m=L.circleMarker([g.lat,g.lon],{radius:r,fillColor:col,color:col,weight:1,opacity:.8,fillOpacity:.5}).addTo(map);
+      m.bindPopup(pointPopup(g));mapMarkers.push(m);
+    }
+    if(totals)totals.innerHTML=`<strong>${d.totals.ips.toLocaleString()} IPs</strong> in view${d.totals.truncated?` · showing top ${d.totals.returned} by connections`:''} · zoom <strong>${map.getZoom()}</strong>`;
+  }
+}
+
+function fetchMapViewport(){
+  if(!map||selectedPubkey)return;
+  clearTimeout(mapFetchTimer);
+  mapFetchTimer=setTimeout(async()=>{
+    const tok=viewToken;
+    const el=document.getElementById('map-totals');
+    if(el)el.innerHTML=spin('Loading...');
+    try{
+      const raw=map.getBounds(),norm=l=>((l+540)%360)-180;
+      let w=norm(raw.getWest()),e=norm(raw.getEast());
+      if(w>e){w=-179.9;e=179.9}
+      const p=new URLSearchParams({
+        bbox:[Math.min(89.9,raw.getNorth()).toFixed(4),w.toFixed(4),Math.max(-89.9,raw.getSouth()).toFixed(4),e.toFixed(4)].join(','),
+        zoom:map.getZoom(),
+      });
+      if(mapFilters.q)p.set('q',mapFilters.q);
+      if(mapFilters.days)p.set('since',Math.floor(Date.now()/1000)-mapFilters.days*86400);
+      if(mapFilters.type)p.set('type',mapFilters.type);
+      if(mapFilters.cdn)p.set('cdn','1');
+      const d=await api('/geo/map?'+p.toString(),30000);
+      if(staleView(tok))return;
+      renderMapResult(d);
+    }catch(e){if(el)el.innerHTML='<span style="color:var(--danger)">Error: '+esc(e.message)+'</span>'}
+  },300);
+}
+
+// Per-user map: bounded point set + attribution honesty.
+function renderUserMapMarkers(gd){
+  if(!map)return;
+  mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
   const cdnCount=gd.filter(g=>g.cdn).length;
   const real=gd.filter(g=>!g.cdn&&g.lat&&g.lon);
   const bounds=[];
   for(const g of real){
     bounds.push([g.lat,g.lon]);
-    const popup=`<div style="font-size:.78rem;line-height:1.4"><strong>${esc(g.city)}, ${esc(g.country_code)}</strong><br><a href="#ips/${encodeURIComponent(g.ip)}" style="font-family:monospace;color:#58a6ff;text-decoration:underline">${esc(g.ip)}</a><br>Conn: <strong>${g.connections||0}</strong> · Ev: <strong>${g.events||0}</strong>${g.pubkeys?` · 👤 ${g.pubkeys}`:''}<br><span style="color:#8b949e;font-size:.7rem">${esc(g.isp)}${g.proxy?' · 🛡':''}${g.hosting?' · 🖥':''}</span><br><a href="#ips/${encodeURIComponent(g.ip)}" style="color:var(--accent2);font-size:.72rem;cursor:pointer">View details →</a></div>`;
     const r=Math.min(4+(g.connections||1)*2,16);
     const c=g.proxy?'#f85149':(g.hosting?'#8b949e':'#f0c040');
     const m=L.circleMarker([g.lat,g.lon],{radius:r,fillColor:c,color:c,weight:1,opacity:.8,fillOpacity:.5}).addTo(map);
-    m.bindPopup(popup);mapMarkers.push(m)
+    m.bindPopup(pointPopup(g));mapMarkers.push(m);
   }
   const notice=document.getElementById('geo-notice');
   if(notice){
     if(cdnCount&&!real.length){
-      notice.innerHTML=`<div style="margin-bottom:8px;padding:8px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.78rem;color:var(--muted)">☁ ${selectedPubkey?'This user connects only via Cloudflare/VPN egress':'All located IPs are Cloudflare/VPN egress'} (${cdnCount} rotating IPs — WARP / iCloud Private Relay). Real locations are not visible behind these, so there is nothing truthful to plot.</div>`;
+      notice.innerHTML=`<div style="margin-bottom:8px;padding:8px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.78rem;color:var(--muted)">☁ This user connects only via Cloudflare/VPN egress (${cdnCount} rotating IPs — WARP / iCloud Private Relay). Real locations are not visible behind these, so there is nothing truthful to plot.</div>`;
       notice.style.display='block';
     }else if(cdnCount){
-      notice.innerHTML=`<div style="margin-bottom:8px;padding:6px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.74rem;color:var(--muted)">☁ ${cdnCount} Cloudflare/VPN egress IP${cdnCount>1?'s':''} hidden — rotating exits with no real location.</div>`;
+      notice.innerHTML=`<div style="margin-bottom:6px;padding:6px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.74rem;color:var(--muted)">☁ ${cdnCount} Cloudflare/VPN egress IP${cdnCount>1?'s':''} hidden — rotating exits with no real location.</div><div style="margin-bottom:8px;font-size:.72rem;color:var(--muted)">Showing IPs this user published or authenticated from. Read-only connections are anonymous (relay does not require AUTH).</div>`;
       notice.style.display='block';
     }else{
-      notice.style.display='none';
+      notice.innerHTML=`<div style="margin-bottom:8px;font-size:.72rem;color:var(--muted)">Showing IPs this user published or authenticated from. Read-only connections are anonymous (relay does not require AUTH).</div>`;
+      notice.style.display='block';
     }
   }
-  if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:6})
-  else map.setView([20,0],2)
+  if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:8});
+  else map.setView([20,0],2);
 }
 
 async function loadMap(){
@@ -338,45 +397,42 @@ async function loadMap(){
   destroyMap();
   const h=window.innerWidth<768?'350px':'500px';
   const title=selectedPubkey?`Map: <span class="mono" style="color:var(--accent2);font-size:.78rem">${esc(tr(selectedPubkey,20))}</span>`:'🌍 Global Connection Map';
+  const controls=selectedPubkey?'':`
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+      <input type="text" id="map-search" placeholder="🔍 IP, city, ISP, ASN…" value="${esc(mapFilters.q)}" oninput="mapFilters.q=this.value;fetchMapViewport()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:var(--radius);font-size:.78rem;width:200px">
+      <select id="map-days" onchange="setMapFilter('days',parseInt(this.value))" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 6px;border-radius:var(--radius);font-size:.75rem">
+        <option value="0"${mapFilters.days===0?' selected':''}>All time</option>
+        <option value="1"${mapFilters.days===1?' selected':''}>24h</option>
+        <option value="7"${mapFilters.days===7?' selected':''}>7d</option>
+        <option value="30"${mapFilters.days===30?' selected':''}>30d</option>
+      </select>
+      <select id="map-type" onchange="setMapFilter('type',this.value)" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 6px;border-radius:var(--radius);font-size:.75rem">
+        <option value=""${!mapFilters.type?' selected':''}>All types</option>
+        <option value="real"${mapFilters.type==='real'?' selected':''}>Real</option>
+        <option value="hosting"${mapFilters.type==='hosting'?' selected':''}>Hosting</option>
+        <option value="proxy"${mapFilters.type==='proxy'?' selected':''}>Proxy</option>
+      </select>
+      <label style="font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" ${mapFilters.cdn?'checked':''} onchange="setMapFilter('cdn',this.checked)"> ☁ CF egress</label>
+    </div>`;
   area.innerHTML=breadcrumb()+`${selectedPubkey?'<div style="display:flex;gap:12px"><div class="back-link" onclick="navigate(\'users\',\''+esc(selectedPubkey)+'\')">← Back to user</div><div class="back-link" onclick="selectedPubkey=null;navigate(\'map\')">← Back to global map</div></div>':''}
     <div class="detail-card"><h2>${title}</h2>
-    <div id="geo-status" style="margin-bottom:8px;font-size:.78rem;color:var(--muted)">${spin('Loading geo data...')}</div>
+    ${controls}
+    <div id="map-totals" style="margin-bottom:8px;font-size:.78rem;color:var(--muted)">${spin('Loading geo data...')}</div>
     <div id="geo-notice" style="display:none"></div>
     <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;
   await sleep(100);initMap();
-  try{
-    if(staleView(tok))return;
-    const[status,gd]=await Promise.all([api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):'')),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey),45000):api('/geo/all',45000)]);
-    if(staleView(tok))return;
-    const el=document.getElementById('geo-status');
-    if(!gd.length){
-      el.innerHTML= status.total>0
-        ? `📍 <span style="color:var(--accent)">Geocoding ${status.uncached} IPs...</span> (${status.cached}/${status.total} done)`
-        : '<span style="color:var(--muted)">No connections logged yet.</span>';
-      if(status.uncached>0)geoPollTimer=setTimeout(pollGeo,5000);
-    }else{
-      el.innerHTML=`📍 ${status.cached}/${status.total} IPs geocoded${status.uncached>0?` · <span style="color:var(--accent)">Geocoding ${status.uncached} more...</span>`:' ✅'}`;
-      renderMapMarkers(gd);
-      if(status.uncached>0)geoPollTimer=setTimeout(pollGeo,10000);
-    }
-    renderedDataVersion=dataVersion;
-  }catch(e){document.getElementById('geo-status').innerHTML='<span style="color:var(--danger)">Error: '+esc(e.message)+'</span>'}
-}
-
-async function pollGeo(){
-  try{
-    const st=await api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):''));
-    const el=document.getElementById('geo-status');
-    if(!el)return;
-    if(st.uncached>0){
-      el.innerHTML=`📍 ${st.cached}/${st.total} IPs geocoded · <span style="color:var(--accent)">Geocoding ${st.uncached} more...</span>`;
-      geoPollTimer=setTimeout(pollGeo,10000);
-    }else{
-      el.innerHTML=`📍 ${st.cached}/${st.total} IPs geocoded ✅`;
-      const gd=selectedPubkey?await api('/geo/pubkey/'+encodeURIComponent(selectedPubkey),45000):await api('/geo/all',45000);
-      renderMapMarkers(gd);
-    }
-  }catch{}
+  if(selectedPubkey){
+    try{
+      const gd=await api('/geo/pubkey/'+encodeURIComponent(selectedPubkey),45000);
+      if(staleView(tok))return;
+      renderUserMapMarkers(gd);
+      renderedDataVersion=dataVersion;
+    }catch(e){document.getElementById('map-totals').innerHTML='<span style="color:var(--danger)">Error: '+esc(e.message)+'</span>'}
+    return;
+  }
+  map.on('moveend zoomend',fetchMapViewport);
+  fetchMapViewport();
+  renderedDataVersion=dataVersion;
 }
 
 // --- Event Modal ---

@@ -124,7 +124,22 @@ function createAdminRouter() {
   });
 
   // ─── Geo ───
-  router.get('/geo/all', wrap(async (req, res) => res.json(await esQueries.getAllGeo())));
+  // Viewport-driven map data: bbox/zoom decide clusters vs points; q/since/
+  // until/type/includeCdn compose into the same single-index query.
+  router.get('/geo/map', wrap(async (req, res) => {
+    const bbox = req.query.bbox ? String(req.query.bbox).split(',').map(Number) : undefined;
+    if (bbox && (bbox.length !== 4 || bbox.some(isNaN))) return res.status(400).json({ error: 'bbox must be top,left,bottom,right' });
+    res.json(await esQueries.getMapData({
+      bbox,
+      zoom: req.query.zoom !== undefined ? parseInt(req.query.zoom, 10) : undefined,
+      q: req.query.q || '',
+      since: req.query.since ? parseInt(req.query.since, 10) : undefined,
+      until: req.query.until ? parseInt(req.query.until, 10) : undefined,
+      type: req.query.type || '',
+      includeCdn: req.query.cdn === '1',
+      limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined,
+    }));
+  }));
   router.get('/geo/pubkey/:pubkey', wrap(async (req, res) => res.json(await esQueries.getGeoForPubkey(req.params.pubkey))));
   router.get('/geo/status', wrap(async (req, res) => {
     const pubkey = req.query.pubkey;
