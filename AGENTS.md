@@ -12,7 +12,7 @@
 - Commit as: `HAL 9000 <hal9000.zehy2@4wrd.cc>`
 - Default branch: `master`
 - Never force-push
-- Ask before adding new dependencies
+- Server and infrastructure changes (SSH, docker, Dokploy state): diagnose and report by default — ask for explicit permission first, every time, before touching anything
 - Honey's codebase: src/ for app logic, public/ for dashboard, tests TBD
 - Architecture decisions: keep it simple, minimal deps, no frameworks unless asked
 - Geocoding/enrichment: separate project later, not in this repo
