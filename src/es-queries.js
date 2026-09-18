@@ -143,7 +143,7 @@ async function getConnections(limit, offset) {
     size: limit, from: offset,
     body: { sort: [{ connected_at: { order: 'desc' } }] },
   });
-  return result.hits.hits.map(h => ({ _id: h._id, ...h._source }));
+  return result.hits.hits.map(h => ({ id: parseInt(h._id), ...h._source }));
 }
 
 async function getEvents(limit, offset, kinds) {
