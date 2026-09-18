@@ -148,8 +148,8 @@ function getToken(){try{const u=new URLSearchParams(location.search);const t=u.g
 function setToken(t){localStorage.setItem('honey_token',t)}
 function ah(){const t=getToken();return t?{Authorization:'Bearer '+t}:{}}
 
-async function api(path){
-  const r=await fetch(API+path,{headers:ah(),signal:AbortSignal.timeout(API_TIMEOUT)});
+async function api(path, timeoutMs){
+  const r=await fetch(API+path,{headers:ah(),signal:AbortSignal.timeout(timeoutMs||API_TIMEOUT)});
   if(r.status===401){document.getElementById('token-input').style.display='block';throw new Error('Unauthorized')}
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.json();
@@ -303,9 +303,9 @@ function renderMapMarkers(gd){
   if(!map)return;
   mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
   if(!gd||!gd.length)return;
-  // CF WARP / Private Relay egress IPs are rotating shared exits, not real
-  // locations — collapse them into one gray marker instead of 185 fake dots.
-  const cdn=gd.filter(g=>g.cdn&&g.lat&&g.lon);
+  // CF WARP / Private Relay egress IPs are rotating shared exits with no real
+  // location — never plotted. The notice above the map explains them instead.
+  const cdnCount=gd.filter(g=>g.cdn).length;
   const real=gd.filter(g=>!g.cdn&&g.lat&&g.lon);
   const bounds=[];
   for(const g of real){
@@ -316,16 +316,20 @@ function renderMapMarkers(gd){
     const m=L.circleMarker([g.lat,g.lon],{radius:r,fillColor:c,color:c,weight:1,opacity:.8,fillOpacity:.5}).addTo(map);
     m.bindPopup(popup);mapMarkers.push(m)
   }
-  if(cdn.length){
-    const g=cdn[0];
-    const m=L.circleMarker([g.lat,g.lon],{radius:8,fillColor:'#8b949e',color:'#8b949e',weight:1,opacity:.7,fillOpacity:.3,dashArray:'4,4'}).addTo(map);
-    m.bindPopup(`<div style="font-size:.78rem;line-height:1.4"><strong>☁ Cloudflare/VPN egress</strong><br>${cdn.length} rotating exit IP${cdn.length>1?'s':''} (WARP / iCloud Private Relay / Workers).<br><span style="color:#8b949e">Real user locations are not visible behind these.</span></div>`);
-    mapMarkers.push(m);
-    const note=document.getElementById('geo-status');
-    if(note)note.innerHTML+=` · <span style="color:#8b949e">☁ ${cdn.length} CF/VPN egress collapsed</span>`
+  const notice=document.getElementById('geo-notice');
+  if(notice){
+    if(cdnCount&&!real.length){
+      notice.innerHTML=`<div style="margin-bottom:8px;padding:8px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.78rem;color:var(--muted)">☁ ${selectedPubkey?'This user connects only via Cloudflare/VPN egress':'All located IPs are Cloudflare/VPN egress'} (${cdnCount} rotating IPs — WARP / iCloud Private Relay). Real locations are not visible behind these, so there is nothing truthful to plot.</div>`;
+      notice.style.display='block';
+    }else if(cdnCount){
+      notice.innerHTML=`<div style="margin-bottom:8px;padding:6px 12px;border:1px dashed var(--border);border-radius:var(--radius);font-size:.74rem;color:var(--muted)">☁ ${cdnCount} Cloudflare/VPN egress IP${cdnCount>1?'s':''} hidden — rotating exits with no real location.</div>`;
+      notice.style.display='block';
+    }else{
+      notice.style.display='none';
+    }
   }
   if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:6})
-  else if(cdn.length)map.setView([cdn[0].lat,cdn[0].lon],3)
+  else map.setView([20,0],2)
 }
 
 async function loadMap(){
@@ -337,11 +341,12 @@ async function loadMap(){
   area.innerHTML=breadcrumb()+`${selectedPubkey?'<div style="display:flex;gap:12px"><div class="back-link" onclick="navigate(\'users\',\''+esc(selectedPubkey)+'\')">← Back to user</div><div class="back-link" onclick="selectedPubkey=null;navigate(\'map\')">← Back to global map</div></div>':''}
     <div class="detail-card"><h2>${title}</h2>
     <div id="geo-status" style="margin-bottom:8px;font-size:.78rem;color:var(--muted)">${spin('Loading geo data...')}</div>
+    <div id="geo-notice" style="display:none"></div>
     <div id="map-container" style="height:${h};border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)"></div></div>`;
   await sleep(100);initMap();
   try{
     if(staleView(tok))return;
-    const[status,gd]=await Promise.all([api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):'')),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey)):api('/geo/all')]);
+    const[status,gd]=await Promise.all([api('/geo/status'+(selectedPubkey?'?pubkey='+encodeURIComponent(selectedPubkey):'')),selectedPubkey?api('/geo/pubkey/'+encodeURIComponent(selectedPubkey),45000):api('/geo/all',45000)]);
     if(staleView(tok))return;
     const el=document.getElementById('geo-status');
     if(!gd.length){
@@ -368,7 +373,7 @@ async function pollGeo(){
       geoPollTimer=setTimeout(pollGeo,10000);
     }else{
       el.innerHTML=`📍 ${st.cached}/${st.total} IPs geocoded ✅`;
-      const gd=selectedPubkey?await api('/geo/pubkey/'+encodeURIComponent(selectedPubkey)):await api('/geo/all');
+      const gd=selectedPubkey?await api('/geo/pubkey/'+encodeURIComponent(selectedPubkey),45000):await api('/geo/all',45000);
       renderMapMarkers(gd);
     }
   }catch{}

@@ -1,5 +1,6 @@
 const { getClient, INDICES } = require('./es');
 const { isCloudflareIp } = require('./cf');
+const { npubToHex } = require('./npub');
 
 // All the heavy dashboard queries rewritten for Elasticsearch
 
@@ -193,7 +194,13 @@ async function getSubscriptions(limit, offset) {
 }
 
 async function getPubkeys(limit, offset, filter, search, sortKey, sortDir) {
+  // Searching by npub (what users paste) decodes to the hex pubkey ES indexes
+  if (search && search.trim().toLowerCase().startsWith('npub1')) {
+    const hex = npubToHex(search.trim().toLowerCase());
+    if (hex) search = hex;
+  }
   const es = getClient();
+
 
   if (filter === 'readers') {
     // IPs with connections but no pubkey, newest activity first.
@@ -421,13 +428,21 @@ async function getPubkeyIps(pubkey) {
   }));
 }
 
+// The global map is the heaviest query (10k geo docs + two large bucketed
+// aggs) and its inputs change only at geocode-worker cadence — cache it.
+let _allGeoCache = null;
+let _allGeoCacheAt = 0;
+const ALL_GEO_TTL_MS = 30000;
+
 async function getAllGeo() {
+  if (_allGeoCache && Date.now() - _allGeoCacheAt < ALL_GEO_TTL_MS) return _allGeoCache;
   const es = getClient();
   // Get all geo points, enrich with connection/event counts
   const geoResult = await es.search({
     index: INDICES.geo, size: 10000,
     body: {
       query: { exists: { field: 'location' } },
+      _source: ['ip', 'city', 'country_code', 'isp', 'proxy', 'hosting', 'location'],
     },
   });
 
@@ -454,7 +469,7 @@ async function getAllGeo() {
   const connMap = Object.fromEntries(connAgg.aggregations.by_ip.buckets.map(b => [b.key, b]));
   const eventMap = Object.fromEntries(eventAgg.aggregations.by_ip.buckets.map(b => [b.key, b.doc_count]));
 
-  return geoResult.hits.hits.map(h => {
+  const _result = geoResult.hits.hits.map(h => {
     const g = h._source;
     const c = connMap[g.ip];
     return {
@@ -467,6 +482,9 @@ async function getAllGeo() {
       pubkeys: c?.pubkeys?.value || 0,
     };
   }).sort((a, b) => b.connections - a.connections);
+  _allGeoCache = _result;
+  _allGeoCacheAt = Date.now();
+  return _result;
 }
 
 async function getGeoForPubkey(pubkey) {
